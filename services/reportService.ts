@@ -11,9 +11,7 @@ export const generateTechnicalReport = (
     const hash = Math.random().toString(36).substring(7).toUpperCase();
     
     // Model Info
-    const modelNameDisplay = modelType === 'gemini-004' ? 'Gemini Text-Embedding-004 (Standard / 768d)' :
-                             modelType === 'sentence-bert' ? 'Sentence-BERT (Paraphrase-Multilingual / 768d)' :
-                             'Universal Sentence Encoder (USE-Large / 512d)';
+    const modelNameDisplay = 'Gemini Text-Embedding-004 (Standard / 768d)';
     
     // Metrics
     const metrics = graphData?.metrics;

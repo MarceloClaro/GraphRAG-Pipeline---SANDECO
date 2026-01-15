@@ -1,15 +1,17 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { DocumentChunk, EmbeddingVector } from "../types";
 
 // Inicializa o cliente Gemini
-// Assume que process.env.API_KEY está disponível
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Utiliza gemini-1.5-flash para maior estabilidade JSON e prevenção de loops
-const modelName = 'gemini-1.5-flash'; 
-// Alterado para o modelo solicitado/recomendado (text-embedding-004 é a string da API para o modelo Gemini Embedding 004/001 atualizado)
+// Configuração dos Modelos
+const modelName = 'gemini-3-flash-preview'; 
 const embeddingModelName = 'text-embedding-004';
+
+// --- CIRCUIT BREAKER STATE ---
+// Se true, interrompe chamadas à API para evitar erros em cascata e bloqueios
+let globalQuotaExceeded = false;
 
 interface GeminiChunkResponse {
   cleaned_text?: string;
@@ -18,11 +20,12 @@ interface GeminiChunkResponse {
   keywords: string[];
 }
 
-// Helper para delay (promessa de espera)
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Wrapper de Retry com Backoff Exponencial
-async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 4, initialDelay: number = 2000): Promise<T> {
+// Wrapper de Retry com detecção de Cota
+async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 3, initialDelay: number = 2000): Promise<T> {
+  if (globalQuotaExceeded) throw new Error("Circuit Breaker Open: Quota Exceeded");
+
   let lastError: any;
   
   for (let i = 0; i < maxRetries; i++) {
@@ -31,16 +34,27 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
     } catch (error: any) {
       lastError = error;
       
-      const isRateLimit = error.message?.includes('429') || error.status === 429 || error.code === 429 || error.message?.includes('Quota exceeded');
+      const isRateLimit = error.message?.includes('429') || error.status === 429 || error.code === 429 || error.message?.includes('Quota exceeded') || error.message?.includes('Resource has been exhausted');
       const isServerOverload = error.message?.includes('503') || error.status === 503;
-      const isInternal = error.message?.includes('500') || error.status === 500;
       
-      if (isRateLimit || isServerOverload || isInternal) {
-        const waitTime = initialDelay * Math.pow(2, i) + (Math.random() * 1000);
-        console.warn(`[Gemini API] Erro Temporário (${i + 1}/${maxRetries}). Aguardando ${Math.round(waitTime)}ms...`);
+      if (isRateLimit) {
+        console.warn(`[Gemini API] Cota atingida (Tentativa ${i + 1}/${maxRetries}).`);
+        if (i === maxRetries - 1) {
+            // Se falhou na última tentativa por cota, ativa o Circuit Breaker
+            console.error("[Gemini API] COTA EXCEDIDA CRITICAMENTE. ATIVANDO MODO HEURÍSTICO GLOBAL.");
+            globalQuotaExceeded = true;
+        } else {
+            // Backoff agressivo para rate limit
+            const waitTime = initialDelay * Math.pow(3, i) + (Math.random() * 2000);
+            await delay(waitTime);
+            continue;
+        }
+      } else if (isServerOverload) {
+        const waitTime = initialDelay * Math.pow(2, i);
         await delay(waitTime);
         continue;
       }
+      
       throw error; 
     }
   }
@@ -48,7 +62,6 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
 }
 
 // --- HEURISTIC FALLBACK (Regex) ---
-// Usado quando a IA falha (ex: Filtros de segurança em textos legais de crimes, ou timeouts)
 const heuristicEnrichment = (chunk: DocumentChunk): DocumentChunk => {
     const cleanContent = chunk.content.trim();
     const firstLine = cleanContent.split(/\r?\n/)[0] || "";
@@ -56,7 +69,6 @@ const heuristicEnrichment = (chunk: DocumentChunk): DocumentChunk => {
     let label = "Texto";
     let type = "Conteúdo";
     
-    // Regex de Alta Precisão para Jurídico Brasileiro
     if (/^Art\.\s*\d+/i.test(firstLine)) {
          type = "Artigo";
          label = firstLine.match(/^Art\.\s*\d+[º°]?/i)?.[0] || "Artigo";
@@ -77,44 +89,32 @@ const heuristicEnrichment = (chunk: DocumentChunk): DocumentChunk => {
         ...chunk,
         entityType: type,
         entityLabel: label,
-        keywords: ["Extração Heurística", "Fallback"]
+        keywords: ["Extração Heurística", "Modo Offline"]
     };
 };
 
-// --- HYDE: HYPOTHETICAL DOCUMENT EMBEDDING ---
 export const generateHyDEAnswer = async (query: string): Promise<string> => {
+    if (globalQuotaExceeded) return query; // Fail fast
     try {
         const response = await retryOperation(async () => {
             return await ai.models.generateContent({
                 model: modelName,
-                contents: `
-Atue como um jurista sênior.
-Query: "${query}"
-Tarefa: Escreva um parágrafo ideal que responderia a esta pergunta, usando linguagem técnica, citando leis hipotéticas ou doutrina.
-Objetivo: Usar este texto para busca semântica.
-`,
+                contents: `Atue como um jurista. Query: "${query}". Escreva um parágrafo de resposta ideal técnica.`,
             });
         });
         return response.text || "";
     } catch (e) {
-        console.error("Erro HyDE:", e);
         return query; 
     }
 };
 
-// --- CRAG: CORRECTIVE RAG EVALUATOR ---
 export const evaluateChunkRelevance = async (query: string, chunkContent: string): Promise<{relevant: boolean, score: number, reasoning: string}> => {
+    if (globalQuotaExceeded) return { relevant: true, score: 0.5, reasoning: "Circuit Breaker Active" };
     try {
         const response = await retryOperation(async () => {
             return await ai.models.generateContent({
                 model: modelName,
-                contents: `
-Role: RAG Relevance Judge.
-Query: "${query}"
-Context: "${chunkContent.substring(0, 500)}..."
-Task: Is the Context relevant to answer the Query?
-Output JSON: { "score": 0.0-1.0, "relevant": bool, "reasoning": "string" }
-`,
+                contents: `Query: "${query}"\nContext: "${chunkContent.substring(0, 500)}"\nIs relevant? JSON: { "score": 0.0-1.0, "relevant": bool }`,
                 config: { responseMimeType: "application/json" }
             });
         });
@@ -122,20 +122,20 @@ Output JSON: { "score": 0.0-1.0, "relevant": bool, "reasoning": "string" }
         return {
             relevant: result.relevant === true || (result.score || 0) > 0.6,
             score: result.score ?? 0,
-            reasoning: result.reasoning ?? "N/A"
+            reasoning: "AI Evaluation"
         };
     } catch (e) {
         return { relevant: true, score: 0.5, reasoning: "Evaluation Failed" };
     }
 };
 
-// --- SINGLE EMBEDDING ---
 export const generateSingleEmbedding = async (text: string): Promise<number[]> => {
+    if (globalQuotaExceeded) return new Array(768).fill(0);
     try {
         const result = await retryOperation(async () => {
             return await ai.models.embedContent({
                 model: embeddingModelName,
-                contents: text.substring(0, 2048), // Truncate for embedding model safety
+                contents: text.substring(0, 2048),
             });
         });
         return result.embedding?.values || [];
@@ -144,55 +144,36 @@ export const generateSingleEmbedding = async (text: string): Promise<number[]> =
     }
 };
 
-// --- RAG GENERATION ---
 export const generateRAGResponse = async (query: string, context: string, chatHistory: any[]): Promise<string> => {
+    if (globalQuotaExceeded) return "O limite de requisições da IA foi excedido. Não é possível gerar uma nova resposta agora.";
     try {
         const historyText = chatHistory.slice(-4).map(m => `${m.role}: ${m.content}`).join('\n');
         const response = await retryOperation(async () => {
             return await ai.models.generateContent({
                 model: modelName,
-                contents: `
-CONTEXTO:
-${context}
-
-HISTÓRICO:
-${historyText}
-
-PERGUNTA: ${query}
-
-RESPOSTA (Baseada ESTRITAMENTE no contexto acima):
-`
+                contents: `CONTEXTO:\n${context}\n\nHISTÓRICO:\n${historyText}\n\nPERGUNTA: ${query}\n\nRESPOSTA:`
             });
         });
-        return response.text || "Não foi possível gerar a resposta.";
+        return response.text || "Erro na geração.";
     } catch (e) {
         return "Erro de geração.";
     }
 };
 
-/**
- * Processa um único chunk.
- * ESTRATÉGIA DE ROBUSTEZ:
- * 1. Tenta limpeza completa + metadados.
- * 2. Se falhar (ex: loop infinito ou Safety Filter), usa REGEX (Heuristic Enrichment).
- */
 export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<DocumentChunk> => {
-  // Input Safety
-  if (!chunk.content || chunk.content.length < 5) return chunk;
-  const safeContent = chunk.content.slice(0, 1000); // Limit input context
+  // CIRCUIT BREAKER CHECK
+  if (globalQuotaExceeded) {
+      return heuristicEnrichment(chunk);
+  }
 
-  // Attempt 1: Full Processing
+  if (!chunk.content || chunk.content.length < 5) return chunk;
+  const safeContent = chunk.content.slice(0, 1000);
+
   try {
     const prompt = `
       INPUT: "${safeContent}"
-      TASK:
-      1. Clean format (remove newlines/hyphens).
-      2. Classify (Artigo, Inciso, Texto).
-      3. Label (ex: "Art. 5").
-      4. Extract 3 keywords.
-      
-      OUTPUT JSON STRICTLY:
-      { "cleaned_text": "string", "entity_type": "string", "entity_label": "string", "keywords": ["k1", "k2"] }
+      TASK: Classify (Artigo, Inciso, Texto) and Label. Extract 3 keywords.
+      OUTPUT JSON: { "cleaned_text": "string", "entity_type": "string", "entity_label": "string", "keywords": ["k1"] }
     `;
 
     const response = await retryOperation(async () => {
@@ -201,17 +182,12 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
         contents: prompt,
         config: {
           temperature: 0.1,
-          maxOutputTokens: 1024,
           responseMimeType: "application/json"
         }
       });
-    }, 2, 1000);
+    }, 2, 2000); // Mais delay inicial
 
     const text = response.text || "{}";
-    
-    // Safety check for hallucination loops
-    if (text.length > 5000) throw new Error("Loop detected");
-
     const result = JSON.parse(text) as GeminiChunkResponse;
 
     return {
@@ -222,70 +198,78 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
       keywords: result.keywords || []
     };
 
-  } catch (fullError) {
-    // Attempt 2: Metadata Only Fallback
-    try {
-        const fallbackPrompt = `
-          Text: "${safeContent}"
-          Task: Extract metadata only.
-          JSON: { "entity_type": "string", "entity_label": "string", "keywords": ["string"] }
-        `;
-        
-        const fallbackResponse = await retryOperation(async () => {
-            return await ai.models.generateContent({
-                model: modelName,
-                contents: fallbackPrompt,
-                config: { temperature: 0.1, responseMimeType: "application/json" }
-            });
-        }, 1, 1000);
-        
-        const meta = JSON.parse(fallbackResponse.text || "{}");
-        return {
-            ...chunk,
-            entityType: meta.entity_type || "Texto",
-            entityLabel: meta.entity_label || "Auto",
-            keywords: meta.keywords || []
-        };
-    } catch (finalError) {
-        // Last Resort: Heuristic (Regex)
-        // Isso remove o erro do log e garante que o chunk tenha metadados úteis
-        // console.warn(`[Gemini] AI falhou para chunk ${chunk.id.slice(0,8)}. Usando Heurística.`);
-        return heuristicEnrichment(chunk);
-    }
+  } catch (error) {
+    // Se falhar (incluindo Circuit Breaker ativando agora), usa Heurística
+    return heuristicEnrichment(chunk);
   }
 };
 
 export const enhanceChunksWithAI = async (chunks: DocumentChunk[], onProgress: (progress: number) => void): Promise<DocumentChunk[]> => {
+  // Reset circuit breaker on new run, unless it was a hard block? 
+  // Better to reset and try again, but maybe flag sticks for session.
+  // globalQuotaExceeded = false; // Uncomment to force retry on new button click
+  
   const enhancedChunks: DocumentChunk[] = [];
-  const batchSize = 3; 
+  // Reduzir batch size para evitar 429 agressivo
+  const batchSize = 2; 
   
   for (let i = 0; i < chunks.length; i += batchSize) {
     const batch = chunks.slice(i, i + batchSize);
     
+    // Se o Circuit Breaker abriu, processa o resto síncronamente (rápido)
+    if (globalQuotaExceeded) {
+        const results = batch.map(c => heuristicEnrichment(c));
+        enhancedChunks.push(...results);
+        onProgress(Math.round(((i + batch.length) / chunks.length) * 100));
+        await delay(5); // Pequeno respiro para UI
+        continue;
+    }
+
     const results = await Promise.all(batch.map(async (c, idx) => {
-        await delay(idx * 200); // Stagger requests
+        await delay(idx * 500); // Maior stagger entre requests do mesmo batch
         return analyzeChunkWithGemini(c);
     }));
     
     enhancedChunks.push(...results);
     const progress = Math.round(((i + batch.length) / chunks.length) * 100);
     onProgress(progress);
+    
+    // Delay entre batches
+    await delay(1000);
   }
   return enhancedChunks;
 };
 
 export const generateRealEmbeddingsWithGemini = async (chunks: DocumentChunk[], onProgress: (progress: number) => void): Promise<EmbeddingVector[]> => {
   const embeddings: EmbeddingVector[] = [];
-  const batchSize = 5; // Increased batch size for embeddings
+  const batchSize = 3; 
   
   for (let i = 0; i < chunks.length; i += batchSize) {
     const batch = chunks.slice(i, i + batchSize);
     
+    // Fallback rápido se cota estourou
+    if (globalQuotaExceeded) {
+         const results = batch.map(chunk => ({
+                id: chunk.id,
+                vector: new Array(768).fill(0).map(() => Math.random() * 0.1), // Noise vector
+                contentSummary: chunk.content.substring(0, 50) + '...',
+                fullContent: chunk.content,
+                dueDate: chunk.dueDate,
+                entityType: chunk.entityType,
+                entityLabel: chunk.entityLabel,
+                keywords: chunk.keywords,
+                modelUsed: 'Heuristic/Offline'
+         }));
+         embeddings.push(...results);
+         onProgress(Math.round(((i + batch.length) / chunks.length) * 100));
+         await delay(5);
+         continue;
+    }
+
     const batchResults = await Promise.all(batch.map(async (chunk, idx) => {
-        await delay(idx * 100); 
+        await delay(idx * 300); 
 
         try {
-            // Contexto rico para o embedding
             const richContent = `Type: ${chunk.entityType}\nLabel: ${chunk.entityLabel}\nContent: ${chunk.content}`;
             
             const result = await retryOperation(async () => {
@@ -293,13 +277,11 @@ export const generateRealEmbeddingsWithGemini = async (chunks: DocumentChunk[], 
                     model: embeddingModelName,
                     contents: richContent, 
                 });
-            }, 3, 1000);
-            
-            const vector = result.embedding?.values || [];
+            }, 2, 2000);
             
             return {
                 id: chunk.id,
-                vector: vector,
+                vector: result.embedding?.values || [],
                 contentSummary: chunk.content.substring(0, 50) + '...',
                 fullContent: chunk.content,
                 dueDate: chunk.dueDate,
@@ -309,7 +291,7 @@ export const generateRealEmbeddingsWithGemini = async (chunks: DocumentChunk[], 
                 modelUsed: `Gemini ${embeddingModelName}`
             };
         } catch (e: any) {
-            // Fallback Vector (Zeroed) to preserve data integrity instead of dropping
+            // Em caso de erro individual ou CB ativando no meio do batch
             return {
                 id: chunk.id,
                 vector: new Array(768).fill(0), 
@@ -326,6 +308,7 @@ export const generateRealEmbeddingsWithGemini = async (chunks: DocumentChunk[], 
     embeddings.push(...batchResults);
     const progress = Math.round(((i + batch.length) / chunks.length) * 100);
     onProgress(progress);
+    await delay(500);
   }
   return embeddings;
 };

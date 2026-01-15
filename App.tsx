@@ -34,7 +34,7 @@ const App: React.FC = () => {
   const graphRef = useRef<ForceGraphRef>(null);
 
   // Settings
-  const embeddingModel: EmbeddingModelType = 'gemini-004';
+  const embeddingModel: EmbeddingModelType = 'text-embedding-004';
   
   // CNN
   const [cnnParams, setCnnParams] = useState<CNNHyperParameters>({

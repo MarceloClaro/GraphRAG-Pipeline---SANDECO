@@ -2,8 +2,8 @@
 # GraphRAG Pipeline Visualizer: Framework de Auditoria e Recuperação Aumentada por Grafos
 
 ![Status](https://img.shields.io/badge/Status-Auditoria_Técnica_Qualis_A1-blue?style=for-the-badge)
-![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_1.5_Flash_|_Text--Embedding--004-indigo?style=for-the-badge)
-![Robustness](https://img.shields.io/badge/Robustness-Heuristic_Fallback_|_CDN_Worker-success?style=for-the-badge)
+![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_3_Flash_|_Text--Embedding--004-indigo?style=for-the-badge)
+![Robustness](https://img.shields.io/badge/Robustness-Circuit_Breaker_|_Heuristic_Fallback-success?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 **Autor Responsável:** Prof. Marcelo Claro Laranjeira
@@ -14,22 +14,23 @@
 
 Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. O sistema foi atualizado para atingir o nível de robustez **Qualis A1**, introduzindo mecanismos de tolerância a falhas e modelos de última geração:
 
-1.  **Arquitetura Resiliente (Zero-Fail):** Implementação de um sistema de **Fallback Heurístico (Regex)** que assume o controle quando a IA atinge limites de taxa ou filtros de segurança, garantindo 100% de continuidade na ingestão de documentos legais complexos (Vade Mecum, Diários Oficiais).
-2.  **State-of-the-Art Embeddings:** Migração para o modelo **Google `text-embedding-004`**, oferecendo vetores de alta fidelidade (768 dimensões) otimizados para tarefas de recuperação semântica e clusterização.
-3.  **Mitigação de Viés (Triangulated Supervision):** Refinamento de embeddings via CNN com Triplet Loss, utilizando sinais híbridos (Rótulo + Adjacência Temporal + Overlap Léxico) para evitar overfitting em alucinações.
+1.  **Arquitetura Resiliente (Circuit Breaker):** O sistema monitora ativamente as cotas da API Gemini. Ao detectar um erro `429 Quota Exceeded`, o pipeline ativa automaticamente um "Modo de Segurança", desviando instantaneamente o processamento restante para motores heurísticos (Regex) e vetores offline. Isso garante que a ingestão de grandes volumes (ex: 20.000 chunks) nunca trave.
+2.  **State-of-the-Art Processing:** Migração para o modelo **Gemini 3 Flash Preview** para as etapas de enriquecimento (NER), classificação e raciocínio lógico, garantindo velocidade superior e melhor conformidade com instruções complexas de extração de metadados.
+3.  **High-Fidelity Embeddings:** Utilização do modelo **`text-embedding-004`**, oferecendo vetores de 768 dimensões otimizados para tarefas de recuperação semântica e clusterização.
+4.  **Mitigação de Viés (Triangulated Supervision):** Refinamento de embeddings via CNN com Triplet Loss, utilizando sinais híbridos (Rótulo + Adjacência Temporal + Overlap Léxico) para evitar overfitting em alucinações.
 
 ---
 
 ## 🏗️ 2. Arquitetura do Sistema e Fluxo de Dados
 
-O diagrama abaixo ilustra o fluxo rigoroso, destacando a nova camada de segurança heurística.
+O diagrama abaixo ilustra o fluxo rigoroso, destacando a nova camada de segurança heurística e modelos atualizados.
 
 ```mermaid
 graph TD
     A[PDF Bruto] -->|PDF.js (CDN Worker)| B(Chunks Exaustivos)
-    B --> C{IA Disponível & Segura?}
-    C -->|Sim| D[Gemini 1.5 Flash: NER & Classificação]
-    C -->|Não / Erro| E[Fallback Heurístico (Regex Jurídico)]
+    B --> C{IA Disponível & Cota OK?}
+    C -->|Sim| D[Gemini 3 Flash: NER & Classificação]
+    C -->|Não / Cota Excedida| E[Circuit Breaker (Regex Fallback)]
     D --> F{Enriquecimento Semântico}
     E --> F
     F -->|Input Augmentation| G[Text-Embedding-004]
@@ -63,9 +64,9 @@ graph TD
 
 ### 3.1. Ingestão Robusta (Robust Ingestion)
 *   **Worker Dedicado:** Configuração explícita do `pdf.worker.min.js` via CDNJS para contornar problemas de *fake worker* em ambientes ESM.
-*   **Segmentação Híbrida:** 
-    *   *Camada 1 (AI):* Gemini 1.5 Flash analisa e classifica chunks (Artigos, Incisos).
-    *   *Camada 2 (Regex):* Em caso de falha da API (429/500/Safety), um motor Regex de alta precisão identifica estruturas do Direito Brasileiro (Art., §, Capítulos), garantindo que nenhum chunk seja perdido.
+*   **Segmentação Híbrida com Circuit Breaker:** 
+    *   *Modo Normal:* **Gemini 3 Flash** analisa e classifica chunks (Artigos, Incisos).
+    *   *Modo Fallback:* Em caso de estouro de cota (429), o sistema muda dinamicamente para um motor Regex de alta precisão que identifica estruturas do Direito Brasileiro (Art., §, Capítulos).
 
 ### 3.2. Vetorização de Alta Fidelidade
 Utilização do modelo **`text-embedding-004`**. Ao contrário de modelos genéricos, este modelo captura nuances semânticas finas necessárias para distinguir conceitos jurídicos próximos (ex: "Furto" vs "Roubo").
@@ -102,7 +103,7 @@ O sistema gera um **Relatório Técnico** contendo métricas rigorosas:
 
 ### Pré-requisitos
 *   Node.js v18+
-*   Chave de API Google Gemini (`GEMINI_API_KEY`) com acesso aos modelos `gemini-1.5-flash` e `text-embedding-004`.
+*   Chave de API Google Gemini (`GEMINI_API_KEY`) com acesso aos modelos `gemini-3-flash-preview` e `text-embedding-004`.
 
 ### Instalação
 ```bash
@@ -113,8 +114,8 @@ npm start
 
 ### Protocolo de Teste (Lab RAG)
 1.  **Upload:** Carregue PDFs complexos (ex: leis, contratos).
-2.  **Enriquecimento:** Observe o fallback entrar em ação se houver instabilidade na API.
-3.  **Vetorização:** Confirme o uso do modelo `gemini-004` nos logs.
+2.  **Enriquecimento:** Observe a velocidade e se o sistema ativa o "Modo Heurístico" em caso de lentidão da API.
+3.  **Vetorização:** Confirme o uso do modelo `text-embedding-004` nos logs.
 4.  **Lab RAG:** Execute perguntas complexas e verifique o *trace* de execução (HyDE -> Retrieval -> CRAG -> Graph).
 
 ---

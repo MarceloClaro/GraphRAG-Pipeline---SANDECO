@@ -7,7 +7,7 @@ export enum PipelineStage {
   QUERY = 'QUERY' // Nova etapa real de inferência
 }
 
-export type EmbeddingModelType = 'gemini-004'; // Atualizado para o padrão 004/001 solicitado
+export type EmbeddingModelType = 'text-embedding-004';
 
 export interface CNNHyperParameters {
   margin: number;       // Margem para Triplet Loss (ex: 0.2)
