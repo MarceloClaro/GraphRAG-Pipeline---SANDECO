@@ -1,17 +1,21 @@
-import React, { useState } from 'react';
-import { PipelineStage, DocumentChunk, EmbeddingVector, ClusterPoint, GraphData } from './types';
+
+import React, { useState, useRef } from 'react';
+import { PipelineStage, DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, EmbeddingModelType } from './types';
 import { 
   processRealPDFsToChunks, 
   generateEmbeddingsFromChunks, 
   generateClustersFromEmbeddings, 
   generateGraphFromClusters 
 } from './services/mockDataService';
-import { enhanceChunksWithAI } from './services/geminiService';
+import { enhanceChunksWithAI, generateRealEmbeddingsWithGemini } from './services/geminiService';
 import { extractTextFromPDF } from './services/pdfService';
 import { downloadCSV } from './services/exportService';
+import { generateTechnicalReport } from './services/reportService';
 import PipelineProgress from './components/PipelineProgress';
 import FullContentModal from './components/FullContentModal';
-import ForceGraph from './components/charts/ForceGraph';
+import ForceGraph, { ForceGraphRef } from './components/charts/ForceGraph';
+import GraphMetricsDashboard from './components/GraphMetricsDashboard';
+import ClusterAnalysisPanel from './components/ClusterAnalysisPanel';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 const App: React.FC = () => {
@@ -21,6 +25,13 @@ const App: React.FC = () => {
   const [embeddings, setEmbeddings] = useState<EmbeddingVector[]>([]);
   const [clusters, setClusters] = useState<ClusterPoint[]>([]);
   const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [highlightedClusters, setHighlightedClusters] = useState<number[]>([]);
+  
+  // Refs
+  const graphRef = useRef<ForceGraphRef>(null);
+
+  // Settings
+  const [embeddingModel, setEmbeddingModel] = useState<EmbeddingModelType>('gemini-004');
   
   // Upload State
   const [isProcessing, setIsProcessing] = useState(false);
@@ -31,6 +42,10 @@ const App: React.FC = () => {
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [modalContent, setModalContent] = useState({ title: '', text: '' });
+
+  // Report State
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportText, setReportText] = useState('');
 
   // Handle Real File Upload
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -90,15 +105,36 @@ const App: React.FC = () => {
     }
   };
 
-  const handleProcessEmbeddings = () => {
+  const handleProcessEmbeddings = async () => {
     setIsProcessing(true);
-    setProcessingStatus("Gerando vetores e embeddings...");
-    setTimeout(() => {
-        const embeds = generateEmbeddingsFromChunks(chunks);
+    setProcessingStatus("Inicializando modelo de embedding...");
+    
+    // Pequeno delay para UI atualizar
+    await new Promise(r => setTimeout(r, 100));
+
+    try {
+        let embeds: EmbeddingVector[];
+        
+        if (embeddingModel === 'gemini-004') {
+            setProcessingStatus("Gerando Embeddings Reais via Gemini API (High-Fidelity)...");
+            embeds = await generateRealEmbeddingsWithGemini(chunks, (progress) => {
+                setProcessingStatus(`Gerando vetores (Gemini-004)... ${progress}%`);
+            });
+        } else {
+            setProcessingStatus(`Gerando vetores simulados (${embeddingModel === 'sentence-bert' ? 'Sentence-BERT' : 'USE'})...`);
+            // Simulação estrutural local
+            await new Promise(r => setTimeout(r, 1000));
+            embeds = generateEmbeddingsFromChunks(chunks, embeddingModel);
+        }
+
         setEmbeddings(embeds);
         setStage(PipelineStage.EMBEDDINGS);
+    } catch (e) {
+        console.error(e);
+        setUploadError("Erro na geração de embeddings.");
+    } finally {
         setIsProcessing(false);
-    }, 800);
+    }
   };
 
   const handleRunClustering = () => {
@@ -114,13 +150,19 @@ const App: React.FC = () => {
 
   const handleBuildGraph = () => {
     setIsProcessing(true);
-    setProcessingStatus("Construindo grafo de conhecimento...");
+    setProcessingStatus("Construindo grafo de conhecimento e calculando métricas...");
     setTimeout(() => {
         const graph = generateGraphFromClusters(clusters);
         setGraphData(graph);
         setStage(PipelineStage.GRAPH);
         setIsProcessing(false);
     }, 1000);
+  };
+
+  const handleGenerateReport = () => {
+    const report = generateTechnicalReport(chunks, embeddings, graphData, embeddingModel);
+    setReportText(report);
+    setReportOpen(true);
   };
 
   // CSV Export Handlers
@@ -142,7 +184,9 @@ const App: React.FC = () => {
     const dataToExport = embeddings.map(e => ({
       ID: e.id,
       Tipo_Entidade: e.entityType,
-      Vetor_Simulado: `[${e.vector.map(v => v.toFixed(4)).join('; ')}]`,
+      Modelo: e.modelUsed,
+      Dimensao_Vetor: e.vector.length,
+      Vetor_Preview: `[${e.vector.slice(0, 5).map(v => v.toFixed(4)).join('; ')}...]`,
       Conteudo_Completo: e.fullContent
     }));
     downloadCSV(dataToExport, 'etapa2_embeddings.csv');
@@ -175,6 +219,7 @@ const App: React.FC = () => {
       Origem: l.source,
       Destino: l.target,
       Peso: l.value.toFixed(4),
+      Confianca: l.confidence.toFixed(4),
       Tipo: l.type
     }));
     downloadCSV(edgesExport, 'etapa6_grafo_arestas.csv');
@@ -225,10 +270,23 @@ const App: React.FC = () => {
               {stage === PipelineStage.CLUSTERING && "3. Clusterização Semântica"}
               {stage === PipelineStage.GRAPH && "4. Grafo de Conhecimento"}
             </h2>
-            <div className="flex space-x-3">
+            <div className="flex items-center space-x-3">
               
               {stage === PipelineStage.UPLOAD && chunks.length > 0 && (
                 <>
+                  <div className="flex items-center space-x-2 mr-2">
+                     <label className="text-xs font-semibold text-slate-600">Modelo:</label>
+                     <select 
+                        value={embeddingModel}
+                        onChange={(e) => setEmbeddingModel(e.target.value as EmbeddingModelType)}
+                        className="text-sm border border-slate-300 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-500"
+                     >
+                        <option value="gemini-004">Gemini Text-Embedding-004 (Real API)</option>
+                        <option value="sentence-bert">Sentence-BERT (Simulado)</option>
+                        <option value="use">Universal Sentence Encoder (Simulado)</option>
+                     </select>
+                  </div>
+
                   {!aiEnhanced && (
                     <button 
                       onClick={handleEnhanceWithAI} 
@@ -257,6 +315,10 @@ const App: React.FC = () => {
                 </button>
               )}
               {stage === PipelineStage.GRAPH && (
+                <>
+                <button onClick={handleGenerateReport} className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
+                    📄 Relatório Técnico
+                </button>
                 <button onClick={() => {
                     setStage(PipelineStage.UPLOAD);
                     setChunks([]);
@@ -267,6 +329,7 @@ const App: React.FC = () => {
                 }} className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-4 py-2 rounded-lg shadow-sm transition-all font-medium">
                   Novo Processamento
                 </button>
+                </>
               )}
             </div>
           </div>
@@ -373,8 +436,8 @@ const App: React.FC = () => {
             <div className="space-y-4">
               <div className="flex justify-between items-center bg-indigo-50 p-4 rounded-lg border border-indigo-100 mb-4">
                  <div>
-                    <h3 className="font-semibold text-indigo-900">Geração de Embeddings</h3>
-                    <p className="text-sm text-indigo-700">Vetores gerados a partir do texto limpo e enriquecido.</p>
+                    <h3 className="font-semibold text-indigo-900">Geração de Embeddings ({embeddingModel})</h3>
+                    <p className="text-sm text-indigo-700">Vetores gerados com sucesso. Dimensões: {embeddings[0]?.vector.length || 0}.</p>
                  </div>
                  <button onClick={exportEmbeddings} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
                     CSV
@@ -393,7 +456,7 @@ const App: React.FC = () => {
                         </div>
                     </div>
                     <div className="font-mono text-xs text-green-600 break-all bg-slate-50 p-2 rounded mb-3">
-                      [{emb.vector.map(n => n.toFixed(3)).join(', ')}, ...]
+                      [{emb.vector.slice(0, 10).map(n => n.toFixed(3)).join(', ')}, ...] ({emb.vector.length} dim)
                     </div>
                     <button 
                       onClick={() => openModal(`Texto Base: ${emb.entityLabel}`, emb.fullContent)}
@@ -445,7 +508,7 @@ const App: React.FC = () => {
                       />
                       <Scatter name="Documentos" data={clusters} fill="#8884d8">
                         {clusters.map((entry, index) => {
-                           const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
+                           const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1'];
                            return <Cell key={`cell-${index}`} fill={colors[entry.clusterId % colors.length]} />;
                         })}
                       </Scatter>
@@ -457,13 +520,15 @@ const App: React.FC = () => {
 
           {/* Stage 4: Graph View */}
           {stage === PipelineStage.GRAPH && graphData && (
-            <div className="space-y-4">
-               <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
-                  <div className="text-sm text-slate-600">
-                     <p><strong>Nós:</strong> {graphData.nodes.length} | <strong>Arestas:</strong> {graphData.links.length}</p>
-                     <p className="text-xs text-slate-400">Conexões semânticas reforçadas pelas entidades descobertas pelo Gemini.</p>
-                  </div>
+            <div className="space-y-6">
+               <GraphMetricsDashboard metrics={graphData.metrics} />
+
+               <div className="flex justify-end items-center gap-4 mb-2">
                   <div className="flex space-x-2">
+                    <button onClick={() => graphRef.current?.downloadGraphImage()} className="flex items-center text-sm bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition">
+                        <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        Baixar PNG
+                    </button>
                     <button onClick={exportGraph} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
                         CSV (Nós)
                     </button>
@@ -473,10 +538,25 @@ const App: React.FC = () => {
                   </div>
                </div>
                
-               <ForceGraph 
-                 data={graphData} 
-                 onNodeClick={(node) => openModal(`${node.label} (${node.entityType})`, node.fullContent)}
-               />
+               <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                  {/* Painel de Análise Lateral */}
+                  <div className="lg:col-span-1">
+                     <ClusterAnalysisPanel 
+                        graphData={graphData} 
+                        onClusterSelect={(ids) => setHighlightedClusters(ids)} 
+                     />
+                  </div>
+                  
+                  {/* Área do Grafo Principal */}
+                  <div className="lg:col-span-3">
+                     <ForceGraph 
+                       ref={graphRef}
+                       data={graphData} 
+                       onNodeClick={(node) => openModal(`${node.label} (${node.entityType})`, node.fullContent)}
+                       highlightedClusterIds={highlightedClusters}
+                     />
+                  </div>
+               </div>
             </div>
           )}
 
@@ -488,6 +568,13 @@ const App: React.FC = () => {
         onClose={() => setModalOpen(false)} 
         title={modalContent.title}
         content={modalContent.text}
+      />
+
+      <FullContentModal 
+        isOpen={reportOpen} 
+        onClose={() => setReportOpen(false)} 
+        title="Relatório Técnico Qualis A1"
+        content={reportText}
       />
     </div>
   );

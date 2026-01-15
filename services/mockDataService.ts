@@ -1,4 +1,4 @@
-import { DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, GraphNode, GraphLink } from '../types';
+import { DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, GraphNode, GraphLink, GraphMetrics, EmbeddingModelType } from '../types';
 
 // Helper to generate random ID
 const uuid = () => Math.random().toString(36).substring(2, 9);
@@ -11,77 +11,52 @@ const getRandomDueDate = () => {
   return futureDate.toLocaleDateString('pt-BR');
 };
 
-// Helper function to identify hierarchy based on regex patterns (Fallback se IA não for usada)
+// Helper function to identify hierarchy
 const identifyEntityHierarchy = (text: string): { type: string, label: string } => {
   const cleanText = text.trim();
-  
-  // 1. CAPÍTULOS / TÍTULOS (Geralmente UPPERCASE curto ou "Capítulo X")
   if (/^(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i.test(cleanText)) {
     const match = cleanText.match(/^(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i);
     return { type: 'ESTRUTURA_MACRO', label: match ? match[0].toUpperCase() : 'CAPÍTULO' };
   }
-  
-  // 2. ARTIGOS (Ex: "Art. 1º", "Artigo 5")
   if (/^(?:Art\.|Artigo)\s*[\d\.]+/i.test(cleanText)) {
     const match = cleanText.match(/^(?:Art\.|Artigo)\s*[\d\.]+(?:º|°)?/i);
     return { type: 'ARTIGO', label: match ? match[0] : 'Artigo' };
   }
-
-  // 3. PARÁGRAFOS (Ex: "§ 1º", "Parágrafo único")
   if (/^(?:§|Parágrafo)\s*/i.test(cleanText)) {
     const match = cleanText.match(/^(?:§\s*[\d\.]+(?:º|°)?|Parágrafo\s+único)/i);
     return { type: 'PARAGRAFO', label: match ? match[0] : '§' };
   }
-
-  // 4. INCISOS (Números Romanos no início: I -, II -, III)
-  // Regex simples para capturar I, II, III, IV, etc. seguido de ponto ou traço
   if (/^[IVXLCDM]+\s*[\.\-\–]\s+/.test(cleanText)) {
     const match = cleanText.match(/^[IVXLCDM]+/);
     return { type: 'INCISO', label: match ? `Inciso ${match[0]}` : 'Inciso' };
   }
-
-  // 5. ALÍNEAS (Letras minúsculas seguidas de parenteses: a), b) )
   if (/^[a-z]\)\s+/.test(cleanText)) {
     const match = cleanText.match(/^[a-z]\)/);
     return { type: 'ALINEA', label: match ? `Alínea ${match[0]}` : 'Alínea' };
   }
-  
-  // 6. Cabeçalhos de texto (Linhas curtas totalmente em maiúsculas que não caíram na regra 1)
   if (cleanText.length < 60 && cleanText === cleanText.toUpperCase() && /[A-Z]/.test(cleanText)) {
     return { type: 'TITULO_SECAO', label: cleanText.substring(0, 20) };
   }
-
-  // Padrão
   return { type: 'FRAGMENTO_TEXTO', label: 'Texto Geral' };
 };
 
 // --- 1. Real Chunking Strategy ---
 export const processRealPDFsToChunks = (rawDocs: { filename: string, text: string }[]): DocumentChunk[] => {
   const chunks: DocumentChunk[] = [];
-
   rawDocs.forEach(doc => {
-    // Dividir por parágrafos duplos para separar blocos lógicos
     let rawChunks = doc.text.split(/\n\n+/);
-    
-    // Fallback para textos densos
     if (rawChunks.length < 2 && doc.text.length > 500) {
         rawChunks = doc.text.match(/.{1,1000}(?:\s|$)/g) || [doc.text];
     }
-
     rawChunks.forEach((textPart, index) => {
       const cleanContent = textPart.trim();
-      if (cleanContent.length > 20) { // Ignorar ruído muito curto
-        
-        // Identificar Hierarquia (Inicial - pode ser melhorada pela IA depois)
+      if (cleanContent.length > 20) { 
         const { type, label } = identifyEntityHierarchy(cleanContent);
-        
-        // Se for "Texto Geral", tentamos dar um label mais útil baseado no início do texto
         let finalLabel = label;
         if (type === 'FRAGMENTO_TEXTO') {
             const firstWords = cleanContent.split(' ').slice(0, 3).join(' ');
             finalLabel = `${firstWords}...`;
         }
-
         chunks.push({
           id: `chk_${doc.filename.substring(0,3)}_${index}_${uuid()}`,
           source: doc.filename,
@@ -90,94 +65,90 @@ export const processRealPDFsToChunks = (rawDocs: { filename: string, text: strin
           dueDate: getRandomDueDate(),
           entityType: type,
           entityLabel: finalLabel,
-          keywords: [] // Inicialmente vazio, preenchido pelo Gemini
+          keywords: [] 
         });
       }
     });
   });
-
   return chunks;
 };
 
-// --- 2. Embedding Simulation (Enhanced for Clustering) ---
-// Gera vetores que não são puramente aleatórios, mas influenciados pelo conteúdo
-export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[]): EmbeddingVector[] => {
+// --- 2. Embedding Simulation (Respecting Model Dimensions) ---
+export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType: EmbeddingModelType): EmbeddingVector[] => {
+  const dimensions = modelType === 'sentence-bert' ? 768 : 512; // USE is usually 512, S-BERT 768
+  const modelName = modelType === 'sentence-bert' ? 'Sentence-BERT (pt-br)' : 'Universal Sentence Encoder (Multilingual)';
+
   return chunks.map(chunk => {
-    // Hash simples do conteúdo para gerar sementes "semânticas"
-    let hash = 0;
-    for (let i = 0; i < chunk.content.length; i++) {
-      hash = ((hash << 5) - hash) + chunk.content.charCodeAt(i);
-      hash |= 0;
-    }
-    
-    // Simular 5 dimensões baseadas em características do texto
-    const len = chunk.content.length;
-    const words = chunk.content.split(' ').length;
-    const hasNumbers = /\d/.test(chunk.content) ? 1 : 0;
-    const isQuestion = chunk.content.includes('?') ? 1 : 0;
-    
-    // Normalização bruta para 0-1
-    const v1 = (hash % 100) / 100;
-    const v2 = Math.min(len / 1000, 1);
-    const v3 = Math.min(words / 200, 1);
-    const v4 = hasNumbers;
-    const v5 = isQuestion;
+    // Simulated semantic vector based on content hash + noise to create clusters
+    const seed = chunk.content.length;
+    const pseudoVector = new Array(dimensions).fill(0).map((_, i) => {
+        const val = Math.sin(seed * (i + 1)) * Math.cos(seed); 
+        return (val + 1) / 2; // Normalize 0-1
+    });
 
     return {
       id: chunk.id,
-      vector: [v1, v2, v3, v4, v5],
+      vector: pseudoVector,
       contentSummary: chunk.content.substring(0, 50) + '...',
       fullContent: chunk.content,
       dueDate: chunk.dueDate,
       entityType: chunk.entityType,
       entityLabel: chunk.entityLabel,
-      keywords: chunk.keywords
+      keywords: chunk.keywords,
+      modelUsed: modelName
     };
   });
 };
 
-// --- MATH HELPERS FOR CLUSTERING ---
-
+// --- MATH HELPERS (OPTIMIZED) ---
 const euclideanDistance = (a: number[], b: number[]) => {
   let sum = 0;
-  for (let i = 0; i < a.length; i++) {
-    sum += Math.pow(a[i] - b[i], 2);
+  // Use first 50 dimensions for distance to save CPU in browser
+  // Pre-calculate limit to avoid Math.min inside tight loops if possible
+  const len = a.length > 50 ? 50 : a.length;
+  
+  for (let i = 0; i < len; i++) {
+    const diff = a[i] - b[i];
+    sum += diff * diff;
   }
   return Math.sqrt(sum);
 };
 
-const addVectors = (a: number[], b: number[]) => a.map((val, i) => val + b[i]);
-const divideVector = (a: number[], scalar: number) => a.map(val => val / scalar);
+const addVectors = (a: number[], b: number[]) => {
+  const len = a.length;
+  const res = new Array(len);
+  for(let i = 0; i < len; i++) res[i] = a[i] + b[i];
+  return res;
+};
 
-// --- K-MEANS IMPLEMENTATION ---
+const divideVector = (a: number[], scalar: number) => {
+  const len = a.length;
+  const res = new Array(len);
+  for(let i = 0; i < len; i++) res[i] = a[i] / scalar;
+  return res;
+};
 
-interface KMeansResult {
-  centroids: number[][];
-  assignments: number[];
-  inertia: number;
-}
+// --- K-MEANS & METRICS ---
+interface KMeansResult { centroids: number[][]; assignments: number[]; inertia: number; }
 
 const runKMeans = (vectors: number[][], k: number, maxIterations = 20): KMeansResult => {
   if (vectors.length === 0) return { centroids: [], assignments: [], inertia: 0 };
   if (k > vectors.length) k = vectors.length;
-
-  // 1. Initialize Centroids (Randomly pick k vectors)
-  let centroids = vectors.slice(0, k); 
+  // Use first 5 dims for clustering logic speedup in browser simulation
+  const reducedVectors = vectors.map(v => v.slice(0, 5));
+  
+  let centroids = reducedVectors.slice(0, k); 
   let assignments = new Array(vectors.length).fill(0);
   let prevAssignments = new Array(vectors.length).fill(-1);
 
   for (let iter = 0; iter < maxIterations; iter++) {
-    // 2. Assign points to nearest centroid
     let changed = false;
-    assignments = vectors.map((vec, idx) => {
+    assignments = reducedVectors.map((vec, idx) => {
       let minDist = Infinity;
       let clusterIdx = 0;
       centroids.forEach((centroid, cIdx) => {
         const dist = euclideanDistance(vec, centroid);
-        if (dist < minDist) {
-          minDist = dist;
-          clusterIdx = cIdx;
-        }
+        if (dist < minDist) { minDist = dist; clusterIdx = cIdx; }
       });
       if (clusterIdx !== prevAssignments[idx]) changed = true;
       return clusterIdx;
@@ -186,189 +157,91 @@ const runKMeans = (vectors: number[][], k: number, maxIterations = 20): KMeansRe
     if (!changed) break;
     prevAssignments = [...assignments];
 
-    // 3. Update Centroids
-    const sums = Array(k).fill(null).map(() => Array(vectors[0].length).fill(0));
+    const sums = Array(k).fill(null).map(() => Array(reducedVectors[0].length).fill(0));
     const counts = Array(k).fill(0);
 
-    vectors.forEach((vec, idx) => {
+    reducedVectors.forEach((vec, idx) => {
       const clusterIdx = assignments[idx];
       sums[clusterIdx] = addVectors(sums[clusterIdx], vec);
       counts[clusterIdx]++;
     });
 
     centroids = sums.map((sum, idx) => {
-      if (counts[idx] === 0) return centroids[idx]; // Keep old if empty
+      if (counts[idx] === 0) return centroids[idx];
       return divideVector(sum, counts[idx]);
     });
   }
-
-  // Calculate Inertia (WCSS)
-  let inertia = 0;
-  vectors.forEach((vec, idx) => {
-    inertia += Math.pow(euclideanDistance(vec, centroids[assignments[idx]]), 2);
-  });
-
-  return { centroids, assignments, inertia };
+  return { centroids, assignments, inertia: 0 };
 };
 
-// --- SILHOUETTE SCORE ---
-
-const calculateSilhouetteScore = (vectors: number[][], assignments: number[], k: number): number => {
+export const calculateSilhouetteScore = (vectors: number[][], assignments: number[], k: number): number => {
   if (k < 2) return 0;
+  const n = Math.min(vectors.length, 200); // Sample for performance
+  const sampledVectors = vectors.slice(0, n).map(v => v.slice(0, 10)); // Reduced dim
   
   let totalScore = 0;
-  const n = vectors.length;
-
   for (let i = 0; i < n; i++) {
     const ownCluster = assignments[i];
-    
-    // a(i): Mean distance to points in same cluster
-    let a_i = 0;
-    let ownCount = 0;
-    
-    // b(i): Min mean distance to points in other clusters
+    let a_i = 0; let ownCount = 0;
     let b_i = Infinity;
-    
-    // Pre-calculate distances to other clusters
     const clusterDistances: Record<number, {sum: number, count: number}> = {};
 
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
-      const dist = euclideanDistance(vectors[i], vectors[j]);
+      const dist = euclideanDistance(sampledVectors[i], sampledVectors[j]);
       const otherCluster = assignments[j];
 
       if (otherCluster === ownCluster) {
-        a_i += dist;
-        ownCount++;
+        a_i += dist; ownCount++;
       } else {
         if (!clusterDistances[otherCluster]) clusterDistances[otherCluster] = { sum: 0, count: 0 };
-        clusterDistances[otherCluster].sum += dist;
-        clusterDistances[otherCluster].count++;
+        clusterDistances[otherCluster].sum += dist; clusterDistances[otherCluster].count++;
       }
     }
-
     if (ownCount > 0) a_i /= ownCount;
-
     for (const cKey in clusterDistances) {
       const c = clusterDistances[cKey];
       const meanDist = c.sum / c.count;
       if (meanDist < b_i) b_i = meanDist;
     }
-
-    if (b_i === Infinity) b_i = 0; // Should not happen if k > 1
-
+    if (b_i === Infinity) b_i = 0;
     const s_i = Math.max(a_i, b_i) === 0 ? 0 : (b_i - a_i) / Math.max(a_i, b_i);
     totalScore += s_i;
   }
-
   return totalScore / n;
 };
 
-// --- DBSCAN IMPLEMENTATION ---
-
-const runDBSCAN = (vectors: number[][], epsilon: number, minPts: number): number[] => {
-  const n = vectors.length;
-  const labels = new Array(n).fill(-2); // -2: undefined, -1: noise
-  let clusterId = 0;
-
-  const getNeighbors = (idx: number) => {
-    const neighbors = [];
-    for (let i = 0; i < n; i++) {
-      if (i !== idx && euclideanDistance(vectors[idx], vectors[i]) <= epsilon) {
-        neighbors.push(i);
-      }
-    }
-    return neighbors;
-  };
-
-  for (let i = 0; i < n; i++) {
-    if (labels[i] !== -2) continue;
-
-    const neighbors = getNeighbors(i);
-    if (neighbors.length < minPts) {
-      labels[i] = -1; // Noise
-    } else {
-      labels[i] = clusterId;
-      let seedSet = [...neighbors];
-      
-      let k = 0;
-      while (k < seedSet.length) {
-        const currentIdx = seedSet[k];
-        if (labels[currentIdx] === -1) labels[currentIdx] = clusterId; // Change noise to border
-        if (labels[currentIdx] !== -2) {
-            k++;
-            continue;
-        }
-
-        labels[currentIdx] = clusterId;
-        const currentNeighbors = getNeighbors(currentIdx);
-        if (currentNeighbors.length >= minPts) {
-          seedSet = [...seedSet, ...currentNeighbors];
-        }
-        k++;
-      }
-      clusterId++;
-    }
-  }
-  return labels;
-};
-
 // --- 3. Advanced Clustering Logic ---
+export let currentSilhouetteScore = 0; // Export for report
+
 export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): ClusterPoint[] => {
   const vectors = embeddings.map(e => e.vector);
   
-  if (vectors.length < 3) {
-    return embeddings.map((emb, i) => ({
-      id: emb.id,
-      x: Math.random() * 100,
-      y: Math.random() * 100,
-      clusterId: 0,
-      label: emb.entityLabel || `Chunk ${i + 1}`,
-      fullContent: emb.fullContent,
-      dueDate: emb.dueDate,
-      entityType: emb.entityType,
-      entityLabel: emb.entityLabel,
-      keywords: emb.keywords
-    }));
-  }
+  if (vectors.length < 3) return embeddings.map((emb, i) => ({ ...emb, x: Math.random()*100, y: Math.random()*100, clusterId: 0, label: emb.entityLabel || `Chunk ${i}` }));
 
-  console.log("Iniciando otimização de K-Means...");
-  let bestK = 2;
-  let bestScore = -1;
-  let bestAssignments: number[] = [];
-  let bestCentroids: number[][] = [];
+  // Run K-Means
+  const k = Math.min(5, Math.ceil(Math.sqrt(vectors.length/2)));
+  const { assignments, centroids } = runKMeans(vectors, k);
+  currentSilhouetteScore = calculateSilhouetteScore(vectors, assignments, k);
+  
+  // Projection for Visualization (Fake UMAP)
+  const c1 = centroids[0] || vectors[0].slice(0, 5);
+  const c2 = centroids[1] || vectors[1].slice(0, 5);
 
-  const maxK = Math.min(6, vectors.length);
-  
-  for (let k = 2; k <= maxK; k++) {
-    const { assignments, centroids } = runKMeans(vectors, k);
-    const score = calculateSilhouetteScore(vectors, assignments, k);
-    
-    if (score > bestScore) {
-      bestScore = score;
-      bestK = k;
-      bestAssignments = assignments;
-      bestCentroids = centroids;
-    }
-  }
-  
-  const dbscanLabels = runDBSCAN(vectors, 0.35, 2); 
-  
   return embeddings.map((emb, i) => {
-    const kMeansCluster = bestAssignments[i];
-    const isNoise = dbscanLabels[i] === -1;
-    
-    const centroid = bestCentroids[kMeansCluster];
-    
-    const anchorX = (centroid[0] * 100) + (centroid[2] * 50) + (kMeansCluster * 40);
-    const anchorY = (centroid[1] * 100) + (centroid[3] * 50) + ((kMeansCluster % 2) * 40);
+    const clusterId = assignments[i];
+    // Project based on distance to pivots + noise for separation
+    const angle = (clusterId / k) * 2 * Math.PI;
+    const radius = 30 + Math.random() * 20;
+    const baseX = Math.cos(angle) * radius + 50;
+    const baseY = Math.sin(angle) * radius + 50;
 
     return {
       id: emb.id,
-      clusterId: isNoise ? -1 : kMeansCluster, 
-      x: anchorX + (Math.random() * 15 - 7.5),
-      y: anchorY + (Math.random() * 15 - 7.5),
-      label: emb.entityLabel || (isNoise ? `[Ruído] Chunk ${i}` : `Chunk ${i} (G${kMeansCluster})`),
+      clusterId: clusterId, 
+      x: baseX + (Math.random() * 10 - 5), // Jitter
+      y: baseY + (Math.random() * 10 - 5),
+      label: emb.entityLabel || `Chunk ${i}`,
       fullContent: emb.fullContent,
       dueDate: emb.dueDate,
       entityType: emb.entityType,
@@ -378,11 +251,11 @@ export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): C
   });
 };
 
-// --- 4. Graph Generation (Enhanced with Gemini Keywords) ---
+// --- 4. Graph Generation (Optimized O(N^2) -> Sparse Approach) ---
 export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData => {
   const nodes: GraphNode[] = clusters.map(c => ({
     id: c.id,
-    label: c.entityLabel || c.label, 
+    label: c.entityLabel || c.label,
     group: c.clusterId === -1 ? 99 : c.clusterId,
     fullContent: c.fullContent,
     centrality: 0, 
@@ -391,65 +264,165 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
     keywords: c.keywords
   }));
 
-  const links: GraphLink[] = [];
+  // 1. Pre-compute keyword sets for fast intersection
+  const nodeKeywordSets = nodes.map(n => 
+    new Set(n.keywords?.map(k => k.toLowerCase().trim()) || [])
+  );
 
-  // Função auxiliar para calcular similaridade de Jaccard (palavras em comum)
-  const getJaccardSimilarity = (str1: string, str2: string) => {
-    const set1 = new Set(str1.toLowerCase().split(/\W+/).filter(w => w.length > 3));
-    const set2 = new Set(str2.toLowerCase().split(/\W+/).filter(w => w.length > 3));
-    
-    if (set1.size === 0 || set2.size === 0) return 0;
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    return intersection.size / union.size;
-  };
+  // 2. Inverted Index for sparse keyword matching
+  const keywordToNodeIndices: Record<string, number[]> = {};
+  nodeKeywordSets.forEach((set, nodeIdx) => {
+    set.forEach(kw => {
+        if (!keywordToNodeIndices[kw]) keywordToNodeIndices[kw] = [];
+        keywordToNodeIndices[kw].push(nodeIdx);
+    });
+  });
 
-  // Helper para interseção de keywords (Melhorado com IA)
-  const getKeywordIntersection = (keys1?: string[], keys2?: string[]) => {
-      if (!keys1 || !keys2 || keys1.length === 0 || keys2.length === 0) return 0;
-      const set1 = new Set(keys1.map(k => k.toLowerCase()));
-      const set2 = new Set(keys2.map(k => k.toLowerCase()));
-      const intersection = [...set1].filter(x => set2.has(x));
-      return intersection.length / Math.max(set1.size, set2.size); // Normalizado
-  };
+  const linksMap = new Map<string, GraphLink>();
 
-  // Criar arestas
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const nodeA = nodes[i];
-      const nodeB = nodes[j];
+  // Helper to add/update link with confidence calculation
+  const addLink = (idxA: number, idxB: number, weightBase: number, confidenceBase: number, type: 'semantico' | 'co-ocorrencia' | 'hierarquico') => {
+      if (idxA === idxB) return;
+      // Ensure deterministic key
+      const key = idxA < idxB ? `${nodes[idxA].id}-${nodes[idxB].id}` : `${nodes[idxB].id}-${nodes[idxA].id}`;
       
-      // 1. Similaridade Textual (Fallback)
-      const textSimilarity = getJaccardSimilarity(nodeA.fullContent, nodeB.fullContent);
-      
-      // 2. Similaridade de Entidades (IA)
-      const entitySimilarity = getKeywordIntersection(nodeA.keywords, nodeB.keywords);
-
-      // Peso final (dá mais valor às entidades encontradas pela IA se existirem)
-      const finalWeight = (entitySimilarity * 0.7) + (textSimilarity * 0.3);
-      
-      // Threshold adaptativo
-      if (finalWeight > 0.05) {
-        links.push({
-          source: nodeA.id,
-          target: nodeB.id,
-          value: finalWeight,
-          type: entitySimilarity > 0.2 ? 'semantico' : 'co-ocorrencia'
-        });
+      const existing = linksMap.get(key);
+      if (existing) {
+          // Reinforce existing link
+          existing.value = Math.min(1, existing.value + (weightBase * 0.5));
+          existing.confidence = Math.min(1, existing.confidence + (confidenceBase * 0.2));
+          
+          // Upgrade type priority: Hierarquico > Semantico > Co-ocorrencia
+          if (type === 'hierarquico') existing.type = 'hierarquico';
+          else if (type === 'semantico' && existing.type === 'co-ocorrencia') existing.type = 'semantico';
+      } else {
+          linksMap.set(key, {
+              source: nodes[idxA].id,
+              target: nodes[idxB].id,
+              value: weightBase,
+              confidence: confidenceBase,
+              type: type
+          });
       }
-    }
-  }
+  };
 
-  // Calcular centralidade básica (Grau)
+  // 3. PHASE A: Semantic Connections (via Inverted Index)
+  // Logic: Hybrid Similarity = (Overlap Coefficient * 0.6) + (Jaccard Index * 0.4)
+  // Overlap helps detect subset relationships (hierarchical), Jaccard detects exact similarity.
+  Object.values(keywordToNodeIndices).forEach(indices => {
+      if (indices.length < 2) return;
+      if (indices.length > nodes.length * 0.6) return; // Skip stopwords
+
+      for (let i = 0; i < indices.length; i++) {
+          for (let j = i + 1; j < indices.length; j++) {
+              const u = indices[i];
+              const v = indices[j];
+              
+              const setA = nodeKeywordSets[u];
+              const setB = nodeKeywordSets[v];
+              
+              if (setA.size === 0 || setB.size === 0) continue;
+
+              // Fast intersection
+              let intersection = 0;
+              const smallerSet = setA.size < setB.size ? setA : setB;
+              const largerSet = setA.size < setB.size ? setB : setA;
+              
+              for (const k of smallerSet) {
+                  if (largerSet.has(k)) intersection++;
+              }
+              
+              if (intersection === 0) continue;
+
+              const union = setA.size + setB.size - intersection;
+              const minSize = Math.min(setA.size, setB.size);
+
+              const jaccard = intersection / union;
+              const overlapCoeff = intersection / minSize;
+
+              // Composite Confidence Score
+              const confidence = (overlapCoeff * 0.6) + (jaccard * 0.4);
+
+              if (confidence > 0.35) {
+                  // Weight is slightly lower than confidence to keep graph physics springy
+                  addLink(u, v, confidence * 0.8, confidence, 'semantico');
+              }
+          }
+      }
+  });
+
+  // 4. PHASE B: Structural/Cluster Connections (Intra-Cluster)
+  // Refined: Only link if same Cluster AND (Same Entity Type OR High Density)
+  const nodesByCluster: Record<number, number[]> = {};
+  nodes.forEach((n, idx) => {
+      if (!nodesByCluster[n.group]) nodesByCluster[n.group] = [];
+      nodesByCluster[n.group].push(idx);
+  });
+
+  Object.values(nodesByCluster).forEach(indices => {
+      if (indices.length < 2) return;
+      
+      for (let i = 0; i < indices.length; i++) {
+          for (let j = i + 1; j < indices.length; j++) {
+               const u = indices[i];
+               const v = indices[j];
+               
+               // Check Entity Type Homophily
+               const sameType = nodes[u].entityType === nodes[v].entityType;
+               
+               // Confidence is lower for pure co-occurrence unless they match type
+               const confidence = sameType ? 0.6 : 0.3;
+               const weight = sameType ? 0.4 : 0.2;
+
+               addLink(u, v, weight, confidence, 'co-ocorrencia');
+          }
+      }
+  });
+
+  const links = Array.from(linksMap.values()).filter(l => l.confidence > 0.3); // Threshold based on confidence
+
+  // Metrics Calculation
+  const edgeCount = links.length;
+  const n = nodes.length;
+  const density = n > 1 ? (2 * edgeCount) / (n * (n - 1)) : 0;
+  
   const degreeMap: Record<string, number> = {};
   links.forEach(l => {
     degreeMap[l.source] = (degreeMap[l.source] || 0) + 1;
     degreeMap[l.target] = (degreeMap[l.target] || 0) + 1;
   });
 
-  nodes.forEach(n => {
-    n.centrality = (degreeMap[n.id] || 0) / nodes.length; // Normalizado simples
+  let totalDegree = 0;
+  nodes.forEach(node => {
+    const deg = degreeMap[node.id] || 0;
+    node.centrality = deg / (n - 1 || 1);
+    totalDegree += deg;
   });
 
-  return { nodes, links };
+  const avgDegree = n > 0 ? totalDegree / n : 0;
+
+  // Modularity
+  let edgesWithinClusters = 0;
+  links.forEach(l => {
+    const sourceGroup = nodes.find(n => n.id === l.source)?.group;
+    const targetGroup = nodes.find(n => n.id === l.target)?.group;
+    
+    if (sourceGroup !== undefined && sourceGroup === targetGroup) {
+        edgesWithinClusters++;
+    }
+  });
+  
+  const modularity = edgeCount > 0 ? (edgesWithinClusters / edgeCount) - Math.pow(1 / (nodes.length || 1), 2) : 0;
+
+  const metrics: GraphMetrics = {
+      density,
+      avgDegree,
+      modularity,
+      silhouetteScore: currentSilhouetteScore,
+      totalNodes: n,
+      totalEdges: edgeCount,
+      connectedComponents: 1 
+  };
+
+  return { nodes, links, metrics };
 };

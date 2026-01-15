@@ -1,9 +1,12 @@
+
 export enum PipelineStage {
   UPLOAD = 'UPLOAD',
   EMBEDDINGS = 'EMBEDDINGS',
   CLUSTERING = 'CLUSTERING',
   GRAPH = 'GRAPH'
 }
+
+export type EmbeddingModelType = 'gemini-004' | 'sentence-bert' | 'use';
 
 export interface DocumentChunk {
   id: string;
@@ -25,6 +28,7 @@ export interface EmbeddingVector {
   entityType?: string;
   entityLabel?: string;
   keywords?: string[];
+  modelUsed?: string;
 }
 
 export interface ClusterPoint {
@@ -54,11 +58,38 @@ export interface GraphNode {
 export interface GraphLink {
   source: string;
   target: string;
-  value: number; // Peso da aresta
+  value: number; // Peso da aresta (Physics pull)
+  confidence: number; // Confiança na relação (0-1)
   type: 'semantico' | 'co-ocorrencia' | 'hierarquico';
+}
+
+export interface GraphMetrics {
+  density: number;
+  avgDegree: number;
+  modularity: number; // Estimado
+  silhouetteScore: number;
+  totalNodes: number;
+  totalEdges: number;
+  connectedComponents: number;
 }
 
 export interface GraphData {
   nodes: GraphNode[];
   links: GraphLink[];
+  metrics?: GraphMetrics;
+}
+
+// Novos tipos para Análise de Cluster
+export interface ClusterProfile {
+  clusterId: number;
+  nodeCount: number;
+  topKeywords: Array<{ word: string; count: number }>;
+  mainTopics: string[]; // Resumo gerado das top keywords
+}
+
+export interface ClusterSimilarity {
+  targetClusterId: number;
+  similarClusterId: number;
+  score: number; // 0-1 (Jaccard ou Cosine)
+  sharedKeywords: string[];
 }

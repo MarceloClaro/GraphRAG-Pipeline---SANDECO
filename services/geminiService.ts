@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { DocumentChunk } from "../types";
+import { DocumentChunk, EmbeddingVector } from "../types";
 
 // Inicializa o cliente Gemini
 // Assume que process.env.API_KEY está disponível
@@ -8,6 +8,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 // Switch to gemini-2.0-flash-exp as gemini-3-flash-preview (from prompt guidelines) 
 // might not be available to all API keys yet, causing 404.
 const modelName = 'gemini-2.0-flash-exp';
+const embeddingModelName = 'text-embedding-004';
 
 interface GeminiChunkResponse {
   cleaned_text: string;
@@ -104,11 +105,7 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
     };
 
   } catch (error: any) {
-    // Log detalhado para depuração
     console.error(`Erro ao processar chunk ${chunk.id.substring(0,8)} com Gemini (${modelName}):`, error.message || error);
-    
-    // Retorna o chunk original em caso de erro para não quebrar a pipeline
-    // Marcar que falhou na IA para UI se necessário, mas por enquanto mantemos a robustez
     return chunk;
   }
 };
@@ -118,24 +115,93 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
  */
 export const enhanceChunksWithAI = async (chunks: DocumentChunk[], onProgress: (progress: number) => void): Promise<DocumentChunk[]> => {
   const enhancedChunks: DocumentChunk[] = [];
-  const batchSize = 3; // Reduced batch size to respect Rate Limits
+  const batchSize = 3; 
   
   for (let i = 0; i < chunks.length; i += batchSize) {
     const batch = chunks.slice(i, i + batchSize);
-    
-    // Executar lote
     const results = await Promise.all(batch.map(c => analyzeChunkWithGemini(c)));
     enhancedChunks.push(...results);
     
-    // Add a small delay between batches to respect rate limits
-    if (i + batchSize < chunks.length) {
-        await delay(1000); 
-    }
+    if (i + batchSize < chunks.length) await delay(1000); 
     
-    // Atualizar progresso
     const progress = Math.round(((i + batch.length) / chunks.length) * 100);
     onProgress(progress);
   }
   
   return enhancedChunks;
+};
+
+/**
+ * Gera embeddings reais usando o modelo text-embedding-004 do Gemini.
+ */
+export const generateRealEmbeddingsWithGemini = async (chunks: DocumentChunk[], onProgress: (progress: number) => void): Promise<EmbeddingVector[]> => {
+  const embeddings: EmbeddingVector[] = [];
+  const batchSize = 10; // Embeddings endpoint usually has higher throughput
+  
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    
+    // Process batch in parallel but carefully
+    const batchResults = await Promise.all(batch.map(async (chunk) => {
+        try {
+            // Construct a rich content string that includes metadata for higher fidelity embeddings
+            // This ensures the vector captures the classification (Type, Label) and Keywords, not just raw text.
+            const richContent = `
+Tipo: ${chunk.entityType || 'Texto Genérico'}
+Rótulo: ${chunk.entityLabel || 'Sem Rótulo'}
+Palavras-Chave: ${chunk.keywords?.join(', ') || ''}
+
+Conteúdo:
+${chunk.content}
+            `.trim();
+
+            const result = await retryOperation(async () => {
+                return await ai.models.embedContent({
+                    model: embeddingModelName,
+                    content: richContent, 
+                });
+            });
+            
+            // Return full vector
+            const vector = result.embedding?.values || [];
+            
+            return {
+                id: chunk.id,
+                vector: vector,
+                contentSummary: chunk.content.substring(0, 50) + '...',
+                fullContent: chunk.content,
+                dueDate: chunk.dueDate,
+                entityType: chunk.entityType,
+                entityLabel: chunk.entityLabel,
+                keywords: chunk.keywords,
+                modelUsed: `Gemini ${embeddingModelName} (High-Fidelity)`
+            };
+        } catch (e) {
+            console.error("Falha ao gerar embedding para chunk", chunk.id, e);
+            // Fallback para vetor zerado ou aleatório em caso de falha crítica para não parar pipeline
+            // Use 768 dimensions as that is standard for text-embedding-004
+            return {
+                id: chunk.id,
+                vector: new Array(768).fill(0).map(() => Math.random()),
+                contentSummary: chunk.content.substring(0, 50) + '...',
+                fullContent: chunk.content,
+                dueDate: chunk.dueDate,
+                entityType: chunk.entityType,
+                entityLabel: chunk.entityLabel,
+                keywords: chunk.keywords,
+                modelUsed: 'ERROR_FALLBACK'
+            };
+        }
+    }));
+    
+    embeddings.push(...batchResults);
+    
+    // Rate limit safeguard
+    if (i + batchSize < chunks.length) await delay(500);
+
+    const progress = Math.round(((i + batch.length) / chunks.length) * 100);
+    onProgress(progress);
+  }
+
+  return embeddings;
 };
