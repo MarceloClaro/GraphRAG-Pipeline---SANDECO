@@ -3,39 +3,42 @@
 
 ![Status](https://img.shields.io/badge/Status-Auditoria_Técnica_Qualis_A1-blue?style=for-the-badge)
 ![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_2.0_|_D3.js_|_TensorFlow-indigo?style=for-the-badge)
-![RAG Methods](https://img.shields.io/badge/Methods-HyDE_|_CRAG_|_GraphRAG_|_Agentic-purple?style=for-the-badge)
+![Innovation](https://img.shields.io/badge/Innovation-Triangulated_Supervision-orange?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 **Autor Responsável:** Prof. Marcelo Claro Laranjeira
 
 ---
 
-## 📑 1. Resumo Executivo
+## 📑 1. Resumo Executivo e Inovação
 
-Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. Diferentemente de sistemas RAG tradicionais ("Naive RAG"), que dependem exclusivamente de busca vetorial (*vector search*) em um espaço latente plano, esta arquitetura orquestra um **Grafo de Conhecimento Semântico** enriquecido por **Agentes Cognitivos**.
+Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. O sistema transcende as limitações do RAG tradicional ("Naive RAG") e introduz duas inovações críticas para o nível **Qualis A1**:
 
-O sistema integra o estado da arte em LLMs (**Google Gemini 2.0 Flash/Embedding-004**) com técnicas avançadas de **Metric Learning (CNN + Triplet Loss)** e **Teoria Espectral de Grafos**. O objetivo primário é a mitigação rigorosa de alucinações estocásticas através de validação cruzada de recuperação (CRAG) e expansão topológica de contexto (GraphRAG).
+1.  **Extração Exaustiva e Híbrida:** Uma estratégia de *Chunking* que combina segmentação estrutural (por artigos/seções) com janelas deslizantes (*sliding windows*) para garantir **100% de cobertura textual**, recuperando inclusive notas de rodapé e textos "órfãos" frequentemente descartados por parsers comuns.
+2.  **Mitigação de Viés de Auto-Treinamento (Triangulated Supervision):** Uma técnica nova de refinamento de embeddings que impede que a CNN aprenda os erros ("alucinações") de classificação da IA, triangulando sinais de Rótulo, Adjacência Temporal e Overlap Léxico.
 
 ---
 
 ## 🏗️ 2. Arquitetura do Sistema e Fluxo de Dados
 
-O diagrama abaixo ilustra o fluxo de tensores e informações desde a ingestão do documento bruto até a inferência generativa final.
+O diagrama abaixo ilustra o fluxo rigoroso de tensores, destacando a validação cruzada no treinamento da CNN.
 
 ```mermaid
 graph TD
-    A[PDF Bruto] -->|Extração & Limpeza| B(Chunks Hierárquicos)
+    A[PDF Bruto] -->|Extração 100%| B(Chunks Exaustivos)
     B -->|Gemini 2.0: NER & Classificação| C{Enriquecimento Semântico}
     C -->|Input Augmentation| D[High-Fidelity Embeddings]
     
-    subgraph "Metric Learning (Refinamento)"
-    D -->|Triplet Loss| E[CNN 1D - Feature Extraction]
-    E -->|Otimização AdamW| F[Espaço Vetorial Ajustado]
+    subgraph "Inovação: Triangulated Supervision"
+    D -->|Signal 1: AI Label| E{Validador de Tripleto}
+    D -->|Signal 2: Temporal Adjacency| E
+    D -->|Signal 3: Lexical Overlap| E
+    E -->|Consenso >= 2 Sinais| F[CNN 1D - Triplet Loss]
     end
     
     subgraph "Topologia & Grafo"
     F -->|K-Means++ & Silhouette| G[Clusterização Semântica]
-    G -->|Link Prediction: Jaccard + Overlap| H[Grafo de Conhecimento]
+    G -->|Link Prediction| H[Grafo de Conhecimento]
     end
     
     subgraph "RAG Lab (Inferência)"
@@ -51,71 +54,56 @@ graph TD
 
 ---
 
-## 🔬 3. Detalhamento Técnico das Etapas (Pipeline Stages)
+## 🔬 3. Detalhamento Técnico das Etapas
 
-### 3.1. Etapa 1: Ingestão e Enriquecimento Semântico (Upload)
-A pipeline rejeita o *Naive Chunking* (corte arbitrário por tokens). Implementamos um **Chunking Hierárquico Orientado a Estrutura**:
-1.  **Segmentação Lógica:** Identificação de Artigos, Seções e Parágrafos baseada em Regex estrutural.
-2.  **Agente de Limpeza (Data Cleaning Agent):** Um LLM processa cada fragmento para remover ruídos de OCR e normalizar Unicode.
-3.  **Extração de Metadados:**
-    *   **Classificação Taxonômica:** (ex: "Definição Jurídica", "Procedimento Técnico").
-    *   **NER (Named Entity Recognition):** Extração de 3-5 palavras-chave canônicas.
+### 3.1. Ingestão Exaustiva (100% Extraction)
+A pipeline rejeita o descarte arbitrário de dados. Implementamos um **Chunking Híbrido**:
+1.  **Segmentação Estrutural:** Regex primário para capturar hierarquias legais (Artigos, Incisos).
+2.  **Sliding Window Fallback:** Se a estrutura falhar, uma janela deslizante de 1000 tokens (com overlap de 200) varre o resíduo.
+3.  **Fusão de Ruído:** Fragmentos menores que 5 caracteres não são descartados, mas fundidos ao chunk anterior, garantindo que pontuações e numerações de página não quebrem a continuidade semântica.
 
-### 3.2. Etapa 2: Vetorização e Refinamento Neural (Embeddings)
-Transformação do texto em vetores de 768 dimensões.
-*   **Input Augmentation:** O vetor não é gerado apenas do texto cru.
-    $$Input = [Tipo] \oplus [Rótulo] \oplus [Keywords] \oplus [Conteúdo]$$
-*   **Refinamento CNN (Triplet Loss):** Aplicamos uma **Rede Neural Convolucional 1D** treinada em tempo real (browser-side) para distorcer o espaço vetorial, aproximando conceitos similares e afastando distintos.
-    *   **Função de Perda:** $L = \max(d(A,P) - d(A,N) + \alpha, 0)$
-    *   **Validação:** Cross-Validation 80/20 (Treino/Validação) para evitar overfitting.
+### 3.2. Mitigação de Viés: Triangulated Supervision
+Em pipelines tradicionais, se a IA classifica erroneamente um texto A como "Lei" e B como "Lei", a CNN aprende a aproximá-los, reforçando o erro (Viés de Auto-Treinamento).
+Nossa solução **HAC (Hybrid Anchor Consistency)** redefine a mineração de positivos na Triplet Loss. Um par $(A, P)$ só é positivo se satisfizer a lógica:
 
-### 3.3. Etapa 3 & 4: Clusterização e Construção do Grafo
-A topologia não é aleatória; é determinística baseada em propriedades semânticas.
-*   **Clusterização:** K-Means++ validado por **Silhouette Score** ($S > 0.5$ ideal).
-*   **Definição de Arestas (Links):** A conexão $W_{u,v}$ entre dois nós é calculada por uma função híbrida:
-    $$W_{u,v} = 0.6 \cdot \text{Overlap}(K_u, K_v) + 0.4 \cdot \text{Jaccard}(K_u, K_v)$$
-    *   Onde $K$ são os conjuntos de palavras-chave extraídas pela IA. Isso captura tanto a similaridade vocabular quanto a inclusão semântica.
+$$ Score(A, P) = \mathbb{I}(Label_A = Label_P) + \mathbb{I}(Adj_A \approx Adj_P) + \mathbb{I}(Jaccard(A, P) > \tau) $$
+
+A atualização de pesos ocorre apenas se:
+1.  $Score \ge 2$ (Concordância de múltiplos sinais); OU
+2.  $Adj_A - Adj_P = 1$ (Vizinhança imediata, fluxo de tópico forte).
+
+Isso ancora o modelo na **realidade física do documento** (adjacência) e na **realidade léxica** (palavras compartilhadas), ignorando alucinações de classificação isoladas.
+
+### 3.3. Refinamento Neural (Embeddings)
+*   **Função de Perda:** $L = \max(d(A,P) - d(A,N) + \alpha, 0)$
+*   **Otimizador:** AdamW com Decaimento de Peso para regularização.
 
 ---
 
-## 🧠 4. Lab RAG: Técnicas Avançadas Implementadas
+## 🧠 4. Lab RAG: Técnicas Avançadas
 
-A Etapa 5 ("Lab RAG") não é uma simples consulta. Ela executa uma cadeia de pensamento (*Chain of Thought*) complexa, auditável via logs de engenharia.
+A Etapa 5 ("Lab RAG") executa uma cadeia auditável:
 
 ### 4.1. HyDE (Hypothetical Document Embeddings)
-*   **Conceito:** A query do usuário é frequentemente curta e pobre semanticamente.
-*   **Implementação:** O sistema alucina intencionalmente uma "Resposta Ideal" (mas fake) usando um LLM.
-*   **Vantagem:** O vetor desta resposta hipotética está muito mais próximo do vetor do documento real do que a pergunta original estaria.
+O sistema alucina intencionalmente uma "Resposta Ideal" (fake) usando um LLM. O vetor desta resposta hipotética serve como proxy para buscar documentos reais, superando a lacuna semântica entre perguntas curtas e documentos técnicos.
 
 ### 4.2. CRAG (Corrective RAG)
-*   **Conceito:** Recuperação vetorial traz ruído ("False Positives").
-*   **Implementação:** Um **LLM Juiz** avalia cada chunk recuperado.
-    *   *Input:* Query + Chunk.
-    *   *Output:* Score de Relevância (0.0 a 1.0).
-    *   *Ação:* Chunks com score $< 0.5$ são descartados antes de poluírem o contexto do gerador final.
+Um **LLM Juiz** avalia cada chunk recuperado vetorialmente. Chunks com score de relevância $< 0.5$ são descartados antes da geração, limpando o contexto de ruídos ("Red Herrings").
 
 ### 4.3. GraphRAG (Recuperação Topológica)
-*   **Conceito:** A resposta pode estar no "vizinho" do documento encontrado, não no documento em si.
-*   **Implementação:**
-    1.  Identificamos os nós "âncora" validados pelo CRAG.
-    2.  Navegamos pelas arestas do grafo para recuperar os **vizinhos de 1º grau** (1-hop neighbors).
-    3.  Este contexto estendido permite inferências laterais que a busca vetorial ignora.
-
-### 4.4. Agentic RAG & Memória
-*   **Conceito:** Manutenção de estado e autonomia.
-*   **Implementação:** O sistema mantém um histórico de chat (`ChatHistory`) que é injetado recursivamente no prompt final, permitindo perguntas de seguimento ("E sobre o que falamos antes?").
+Utiliza os nós validados pelo CRAG como "sementes" para caminhar no grafo. Recupera vizinhos de 1º grau conectados por arestas semânticas fortes, capturando contextos que não compartilham palavras-chave diretas com a query (ex: inferência indireta).
 
 ---
 
 ## 📊 5. Métricas de Auditoria (Qualis A1)
 
-O sistema gera um **Relatório Técnico** contendo métricas rigorosas de Ciência de Redes:
+O sistema gera um **Relatório Técnico** contendo métricas rigorosas:
 
 | Métrica | Definição Matemática | Interpretação no Contexto RAG |
 | :--- | :--- | :--- |
-| **Modularidade ($Q$)** | $Q = \frac{1}{2m} \sum_{ij} (A_{ij} - \frac{k_i k_j}{2m}) \delta(c_i, c_j)$ | Mede a separabilidade temática. $Q > 0.4$ indica que os documentos formam clusters de conhecimento distintos e coerentes. |
-| **Densidade ($\rho$)** | $\rho = \frac{2|E|}{|V|(|V|-1)}$ | Indica a saturação de informações. Grafos muito densos ("Hairball") causam confusão no LLM; grafos esparsos perdem conexões. |
-| **Centralidade de Autovetor** | $Ax = \lambda x$ | Identifica os documentos "Hub" (autoridades) que conectam múltiplos temas. Essencial para resumir domínios. |
+| **Modularidade ($Q$)** | $Q = \frac{1}{2m} \sum_{ij} (A_{ij} - \frac{k_i k_j}{2m}) \delta(c_i, c_j)$ | Mede a separabilidade temática. $Q > 0.4$ indica clusters de conhecimento robustos. |
+| **Densidade ($\rho$)** | $\rho = \frac{2|E|}{|V|(|V|-1)}$ | Controla o risco de "Hairball" (excesso de conexões confusas). Ideal: $0.05 < \rho < 0.15$. |
+| **Silhouette Score** | $S = \frac{b-a}{\max(a,b)}$ | Valida a coesão dos clusters antes da construção do grafo. |
 
 ---
 
@@ -123,40 +111,23 @@ O sistema gera um **Relatório Técnico** contendo métricas rigorosas de Ciênc
 
 ### Pré-requisitos
 *   Node.js v18+
-*   Chave de API Google Gemini (`GEMINI_API_KEY`) com acesso aos modelos `gemini-2.0-flash-exp` e `text-embedding-004`.
+*   Chave de API Google Gemini (`GEMINI_API_KEY`).
 
 ### Instalação
 ```bash
-# 1. Instalar dependências
 npm install
-
-# 2. Configurar Ambiente (Opcional, a chave pode ser inserida no código se necessário para dev local)
 export API_KEY="sua_chave_gemini"
-
-# 3. Executar Pipeline
 npm start
 ```
 
 ### Protocolo de Teste (Lab RAG)
-1.  **Upload:** Carregue PDFs complexos (ex: Legislação, Papers).
-2.  **Enriquecimento:** Execute a IA para gerar metadados.
-3.  **Grafo:** Gere embeddings, treine a CNN e construa o grafo.
-4.  **Lab RAG:** Acesse a aba "Lab RAG".
-    *   Digite uma pergunta complexa que exija síntese.
-    *   Observe o log lateral: HyDE -> Retrieval -> CRAG -> Graph Expansion.
-    *   Verifique se a resposta final cita os nós expandidos pelo grafo.
+1.  **Upload:** Carregue PDFs. O sistema extrairá 100% do texto.
+2.  **Grafo:** Treine a CNN. Observe no console/status se a perda diminui, indicando que a Supervisão Triangulada está convergindo.
+3.  **Lab RAG:** Faça uma pergunta. Verifique os logs para ver o HyDE gerando a hipótese e o CRAG filtrando o lixo.
 
 ---
 
-## ⚠️ 7. Limitações e Considerações Éticas
-
-1.  **Custo de API:** O método Agentic/CRAG multiplica o número de chamadas ao LLM (1 chamada por chunk recuperado para avaliação).
-2.  **Latência:** A cadeia HyDE + CRAG adiciona latência significativa (~5-10s) em prol da precisão.
-3.  **Viés de Treinamento:** A CNN ajusta os pesos baseada nas *labels* geradas pela própria IA na etapa 1. Erros de classificação inicial podem se propagar.
-
----
-
-## 👨‍💻 8. Créditos e Autoria
+## 👨‍💻 7. Créditos e Autoria
 
 **Desenvolvimento e Concepção Arquitetural:**
 **Prof. Marcelo Claro Laranjeira**

@@ -39,6 +39,10 @@ export const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
 /**
  * Simula o treinamento de uma CNN 1D aplicando Triplet Loss nos embeddings existentes.
  * Implementa Cross-Validation 80/20.
+ * 
+ * INOVAÇÃO (Qualis A1): Triangulated Supervision (HAC)
+ * Mitiga o viés de auto-treinamento usando sinais não-supervisionados (Adjacência Temporal + Overlap de Keywords)
+ * para validar os rótulos gerados pela IA.
  */
 export const trainCNNWithTripletLoss = async (
     embeddings: EmbeddingVector[],
@@ -90,23 +94,50 @@ export const trainCNNWithTripletLoss = async (
         for (const i of indices) {
             const anchor = currentEmbeddings[i];
             
-            // --- Mining Strategy (Restricted to current set) ---
+            // --- INOVAÇÃO: Triangulated Supervision (Mineração de Positivos) ---
             let positiveIdx = -1;
             let negativeIdx = -1;
 
-            // Find Positive in same set
-            const potentialPositives = indices.filter(idx => idx !== i && isValidCandidate(idx) && (
-                currentEmbeddings[idx].entityType === anchor.entityType ||
-                hasKeywordOverlap(anchor, currentEmbeddings[idx])
-            ));
+            // Busca Candidatos Positivos baseados em 3 sinais:
+            // 1. AI Label (Tipo de entidade igual)
+            // 2. Temporal Consistency (Adjacência física no PDF) - Forte prior em documentos
+            // 3. Lexical Overlap (Compartilhamento de keywords) - Ground truth não supervisionado
+            const potentialPositives = indices.filter(idx => {
+                if (idx === i || !isValidCandidate(idx)) return false;
+                
+                const candidate = currentEmbeddings[idx];
+                
+                // Signal 1: AI Label Match
+                const labelMatch = candidate.entityType === anchor.entityType;
+                
+                // Signal 2: Temporal Adjacency (Simulado assumindo ordenação do array original)
+                // Se a diferença de índices for pequena, é vizinho temporal.
+                // Nota: currentEmbeddings preserva ordem original, indices[] está embaralhado, mas idx refere-se à posição original.
+                const temporalMatch = Math.abs(idx - i) <= 2;
+
+                // Signal 3: Lexical Overlap
+                const lexicalMatch = hasKeywordOverlap(anchor, candidate);
+
+                // LOGICA DE TRIANGULAÇÃO:
+                // Aceita se: (Label + Lexical) OU (Label + Temporal) OU (Temporal + Lexical)
+                // Isso previne que um Label errado force um positivo sem evidência física ou léxica.
+                const score = (labelMatch ? 1 : 0) + (temporalMatch ? 1 : 0) + (lexicalMatch ? 1 : 0);
+                
+                // Relaxamento: Se for temporal muito próximo (vizinho imediato), aceita mesmo sem label match (Topic Flow)
+                if (Math.abs(idx - i) === 1) return true;
+
+                return score >= 2; 
+            });
 
             if (potentialPositives.length > 0) {
                 positiveIdx = potentialPositives[Math.floor(Math.random() * potentialPositives.length)];
             }
 
-            // Find Negative in same set
+            // --- Mineração de Negativos ---
+            // Negativo deve violar os sinais fortes (Sem Label, Longe Temporalmente)
             const potentialNegatives = indices.filter(idx => idx !== i && idx !== positiveIdx && isValidCandidate(idx) && 
-                currentEmbeddings[idx].entityType !== anchor.entityType
+                currentEmbeddings[idx].entityType !== anchor.entityType && // Different Label
+                Math.abs(idx - i) > 10 // Far away temporally
             );
 
             if (potentialNegatives.length > 0) {

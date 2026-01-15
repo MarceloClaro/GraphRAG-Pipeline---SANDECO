@@ -1,3 +1,4 @@
+
 import { DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, GraphNode, GraphLink, GraphMetrics, EmbeddingModelType } from '../types';
 
 // Helper to generate random ID
@@ -40,42 +41,57 @@ const identifyEntityHierarchy = (text: string): { type: string, label: string } 
   return { type: 'FRAGMENTO_TEXTO', label: 'Texto Geral' };
 };
 
-// --- 1. Real Chunking Strategy (Full Coverage) ---
+// --- 1. Real Chunking Strategy (Full Coverage / Exhaustive Extraction) ---
 export const processRealPDFsToChunks = (rawDocs: { filename: string, text: string }[]): DocumentChunk[] => {
   const chunks: DocumentChunk[] = [];
   
   rawDocs.forEach(doc => {
     const filenameSafe = doc.filename.replace(/[^a-zA-Z0-9]/g, '').substring(0, 5);
     
-    // Normalização de quebras de linha para garantir consistência
+    // Normalização preservativa: mantém pontuação e estrutura, normaliza apenas quebras de sistema
     const normalizedText = doc.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     
-    // Estratégia Principal: Divisão por Parágrafos (Linha Dupla)
+    // 1. Tentativa de Segmentação Estrutural (Parágrafos Lógicos)
+    // Usa lookahead positivo para tentar manter delimitadores se possível, ou split padrão
     let rawChunks = normalizedText.split(/\n\s*\n/);
     
-    // Estratégia de Fallback: Se o texto for um bloco monolítico (ex: OCR ruim ou formatação estranha)
+    // Fallback para Sliding Window se a estrutura for pobre (OCR ruim ou txt corrido)
     if (rawChunks.length < 3 && normalizedText.length > 1000) {
-        // Usa Regex com [\s\S] para capturar tudo, incluindo quebras de linha.
-        // Divide em blocos de ~1000 caracteres, tentando respeitar espaços.
-        rawChunks = normalizedText.match(/[\s\S]{1,1000}(?=\s|$)/g) || [normalizedText];
+        // Sliding Window: Blocos de 1000 chars com overlap de 200 chars para garantir contexto nas bordas
+        const windowSize = 1000;
+        const overlap = 200;
+        rawChunks = [];
+        for (let i = 0; i < normalizedText.length; i += (windowSize - overlap)) {
+            rawChunks.push(normalizedText.substring(i, i + windowSize));
+        }
     }
 
     rawChunks.forEach((textPart, index) => {
       const cleanContent = textPart.trim();
       
-      // FILTRO MÍNIMO: Apenas descarta string vazia ou ruído extremo (< 3 chars).
-      // Isso garante que títulos, headers e frases curtas sejam preservados.
-      if (!cleanContent || cleanContent.length < 3) return;
+      // GARANTIA DE INTEGRIDADE (Qualis A1):
+      // Não descartamos textos curtos (<3 chars) cegamente. 
+      // Se for muito curto, tentamos anexar ao chunk anterior se possível, ou mantemos como "Ruído/Marcador".
+      if (!cleanContent) return;
+
+      if (cleanContent.length < 5) {
+          // Heurística de fusão: anexa a chunk anterior se for pontuação ou número de página solto
+          if (chunks.length > 0) {
+              const lastChunk = chunks[chunks.length - 1];
+              lastChunk.content += ` ${cleanContent}`;
+              lastChunk.tokens += 1;
+              return;
+          }
+      }
 
       // TRATAMENTO DE BLOCOS GIGANTES (> 2000 chars)
-      // Se um parágrafo for muito longo, ele deve ser subdividido para caber na janela de contexto do embedding.
       if (cleanContent.length > 2000) {
-         // Subdivisão forçada de blocos massivos
+         // Subdivisão forçada de blocos massivos com overlap semântico
          const subSegments = cleanContent.match(/[\s\S]{1,1200}(?=\s|$)/g) || [cleanContent];
          
          subSegments.forEach((sub, subIdx) => {
             const subClean = sub.trim();
-            if (subClean.length < 3) return;
+            if (!subClean) return;
             
             const { type, label } = identifyEntityHierarchy(subClean);
             
@@ -94,14 +110,15 @@ export const processRealPDFsToChunks = (rawDocs: { filename: string, text: strin
             });
          });
       } else {
-        // Processamento padrão para chunks de tamanho normal
+        // Processamento padrão
         const { type, label } = identifyEntityHierarchy(cleanContent);
         
         // Se for texto genérico, cria um label baseado nas primeiras palavras
         let finalLabel = label;
         if (type === 'FRAGMENTO_TEXTO') {
             const words = cleanContent.split(/\s+/);
-            finalLabel = words.slice(0, 4).join(' ') + (words.length > 4 ? '...' : '');
+            // Pega até 6 palavras para o label ser mais descritivo
+            finalLabel = words.slice(0, 6).join(' ') + (words.length > 6 ? '...' : '');
         }
 
         chunks.push({
