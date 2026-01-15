@@ -6,6 +6,7 @@ import {
   generateClustersFromEmbeddings, 
   generateGraphFromClusters 
 } from './services/mockDataService';
+import { enhanceChunksWithAI } from './services/geminiService';
 import { extractTextFromPDF } from './services/pdfService';
 import { downloadCSV } from './services/exportService';
 import PipelineProgress from './components/PipelineProgress';
@@ -23,7 +24,9 @@ const App: React.FC = () => {
   
   // Upload State
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState("Processando...");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [aiEnhanced, setAiEnhanced] = useState(false);
   
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -34,7 +37,9 @@ const App: React.FC = () => {
     if (!event.target.files || event.target.files.length === 0) return;
 
     setIsProcessing(true);
+    setProcessingStatus("Lendo PDF e extraindo texto...");
     setUploadError(null);
+    setAiEnhanced(false);
 
     try {
       const files = Array.from(event.target.files);
@@ -45,7 +50,6 @@ const App: React.FC = () => {
           const processed = await extractTextFromPDF(file);
           extractedDocs.push(processed);
         } else {
-           // Fallback for text files if user wants to upload .txt
            const text = await file.text();
            extractedDocs.push({ filename: file.name, text: text, pageCount: 1 });
         }
@@ -54,14 +58,33 @@ const App: React.FC = () => {
       const generatedChunks = processRealPDFsToChunks(extractedDocs);
       
       if (generatedChunks.length === 0) {
-        setUploadError("Nenhum conteúdo de texto pôde ser extraído dos arquivos. Verifique se são PDFs pesquisáveis (não digitalizados como imagem).");
+        setUploadError("Nenhum conteúdo de texto pôde ser extraído dos arquivos.");
       } else {
         setChunks(generatedChunks);
         setStage(PipelineStage.UPLOAD);
       }
     } catch (err) {
       console.error(err);
-      setUploadError("Erro ao processar arquivos. Certifique-se de que são PDFs válidos.");
+      setUploadError("Erro ao processar arquivos.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleEnhanceWithAI = async () => {
+    if (chunks.length === 0) return;
+    setIsProcessing(true);
+    setProcessingStatus("Gemini AI: Limpando texto e identificando entidades (isso pode levar um momento)...");
+    
+    try {
+      const enhanced = await enhanceChunksWithAI(chunks, (progress) => {
+        setProcessingStatus(`Gemini AI: Processando chunks... ${progress}%`);
+      });
+      setChunks(enhanced);
+      setAiEnhanced(true);
+    } catch (err) {
+      console.error("Erro na IA", err);
+      setUploadError("Falha ao conectar com Gemini API. Verifique sua chave.");
     } finally {
       setIsProcessing(false);
     }
@@ -69,7 +92,7 @@ const App: React.FC = () => {
 
   const handleProcessEmbeddings = () => {
     setIsProcessing(true);
-    // Simular delay de processamento (GPU load)
+    setProcessingStatus("Gerando vetores e embeddings...");
     setTimeout(() => {
         const embeds = generateEmbeddingsFromChunks(chunks);
         setEmbeddings(embeds);
@@ -80,6 +103,7 @@ const App: React.FC = () => {
 
   const handleRunClustering = () => {
     setIsProcessing(true);
+    setProcessingStatus("Calculando clusters (K-Means & DBSCAN)...");
     setTimeout(() => {
         const clusterPoints = generateClustersFromEmbeddings(embeddings);
         setClusters(clusterPoints);
@@ -90,6 +114,7 @@ const App: React.FC = () => {
 
   const handleBuildGraph = () => {
     setIsProcessing(true);
+    setProcessingStatus("Construindo grafo de conhecimento...");
     setTimeout(() => {
         const graph = generateGraphFromClusters(clusters);
         setGraphData(graph);
@@ -103,31 +128,35 @@ const App: React.FC = () => {
     const dataToExport = chunks.map(c => ({
       ID: c.id,
       Arquivo: c.source,
+      Tipo_Entidade: c.entityType,
+      Rotulo_Entidade: c.entityLabel,
       Tokens: c.tokens,
+      Palavras_Chave: c.keywords?.join('; '),
+      Prazo: c.dueDate,
       Conteudo_Completo: c.content
     }));
-    downloadCSV(dataToExport, 'etapa1_chunks_extracao.csv');
+    downloadCSV(dataToExport, 'etapa1_entidades_inteligentes.csv');
   };
 
   const exportEmbeddings = () => {
     const dataToExport = embeddings.map(e => ({
       ID: e.id,
+      Tipo_Entidade: e.entityType,
       Vetor_Simulado: `[${e.vector.map(v => v.toFixed(4)).join('; ')}]`,
       Conteudo_Completo: e.fullContent
     }));
-    downloadCSV(dataToExport, 'etapa2_embeddings_cnn.csv');
+    downloadCSV(dataToExport, 'etapa2_embeddings.csv');
   };
 
   const exportClusters = () => {
     const dataToExport = clusters.map(c => ({
       ID: c.id,
       Cluster_ID: c.clusterId,
-      Coord_X: c.x.toFixed(4),
-      Coord_Y: c.y.toFixed(4),
       Rotulo: c.label,
+      Tipo_Entidade: c.entityType,
       Conteudo_Completo: c.fullContent
     }));
-    downloadCSV(dataToExport, 'etapa4_clusters_otimizados.csv');
+    downloadCSV(dataToExport, 'etapa4_clusters.csv');
   };
 
   const exportGraph = () => {
@@ -135,7 +164,8 @@ const App: React.FC = () => {
     const nodesExport = graphData.nodes.map(n => ({
       Node_ID: n.id,
       Label: n.label,
-      Grupo: n.group,
+      Tipo_Entidade: n.entityType,
+      Palavras_Chave: n.keywords?.join('; '),
       Centralidade: n.centrality.toFixed(4),
       Conteudo_Completo: n.fullContent
     }));
@@ -150,7 +180,6 @@ const App: React.FC = () => {
     downloadCSV(edgesExport, 'etapa6_grafo_arestas.csv');
   };
 
-  // UI Helper: Open Modal
   const openModal = (title: string, content: string) => {
     setModalContent({ title, text: content });
     setModalOpen(true);
@@ -158,22 +187,21 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      {/* Header */}
       <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-3">
             <div className="bg-indigo-500 p-2 rounded-lg">
               <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight">GraphRAG Pipeline</h1>
-              <p className="text-xs text-slate-400">Processamento REAL de PDF para Grafo de Conhecimento</p>
+              <p className="text-xs text-slate-400">Powered by Gemini AI</p>
             </div>
           </div>
           <div className="text-right hidden sm:block">
-             <span className="bg-emerald-900 text-emerald-100 text-xs px-2 py-1 rounded border border-emerald-700">Modo Produção (Browser-Side)</span>
+             <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs px-2 py-1 rounded shadow-sm">AI Enhanced Mode</span>
           </div>
         </div>
       </header>
@@ -183,28 +211,40 @@ const App: React.FC = () => {
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 min-h-[600px] p-6 relative">
           
-          {/* Global Loading Overlay */}
           {isProcessing && (
-             <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-xl">
+             <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-xl">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-                <p className="text-indigo-800 font-medium">Processando dados reais...</p>
+                <p className="text-indigo-800 font-medium animate-pulse">{processingStatus}</p>
              </div>
           )}
 
-          {/* Controls Header */}
           <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100 flex-wrap gap-4">
             <h2 className="text-2xl font-bold text-slate-800">
-              {stage === PipelineStage.UPLOAD && "1. Upload & Extração de Texto"}
+              {stage === PipelineStage.UPLOAD && "1. Extração & Refinamento AI"}
               {stage === PipelineStage.EMBEDDINGS && "2. Vetores & Embeddings"}
               {stage === PipelineStage.CLUSTERING && "3. Clusterização Semântica"}
-              {stage === PipelineStage.GRAPH && "4. Grafo de Conhecimento Final"}
+              {stage === PipelineStage.GRAPH && "4. Grafo de Conhecimento"}
             </h2>
             <div className="flex space-x-3">
               
               {stage === PipelineStage.UPLOAD && chunks.length > 0 && (
-                <button onClick={handleProcessEmbeddings} disabled={isProcessing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
-                  Gerar Embeddings <span className="ml-2">→</span>
-                </button>
+                <>
+                  {!aiEnhanced && (
+                    <button 
+                      onClick={handleEnhanceWithAI} 
+                      disabled={isProcessing} 
+                      className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      Limpar & Classificar com Gemini
+                    </button>
+                  )}
+                  <button onClick={handleProcessEmbeddings} disabled={isProcessing} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
+                    Gerar Embeddings <span className="ml-2">→</span>
+                  </button>
+                </>
               )}
               {stage === PipelineStage.EMBEDDINGS && (
                 <button onClick={handleRunClustering} disabled={isProcessing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
@@ -223,6 +263,7 @@ const App: React.FC = () => {
                     setEmbeddings([]);
                     setClusters([]);
                     setGraphData(null);
+                    setAiEnhanced(false);
                 }} className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-4 py-2 rounded-lg shadow-sm transition-all font-medium">
                   Novo Processamento
                 </button>
@@ -246,8 +287,8 @@ const App: React.FC = () => {
                       <svg className="mx-auto h-12 w-12 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
-                      <p className="mt-4 text-lg font-medium text-slate-700">Carregar Documentos Reais (PDF)</p>
-                      <p className="mt-1 text-sm text-slate-500">Selecione arquivos PDF do seu computador para iniciar a pipeline.</p>
+                      <p className="mt-4 text-lg font-medium text-slate-700">Carregar Documentos PDF</p>
+                      <p className="mt-1 text-sm text-slate-500">Pipeline RAG completa com limpeza de texto e classificação via Gemini AI.</p>
                       <label className="mt-6 inline-block cursor-pointer">
                         <span className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg shadow-md font-medium transition-colors">
                            Selecionar Arquivos
@@ -264,39 +305,57 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <>
-                  <div className="flex justify-between items-center bg-green-50 p-3 rounded-lg border border-green-100">
-                     <span className="text-green-800 font-medium">✅ {chunks.length} chunks processados a partir de documentos reais.</span>
+                  <div className={`flex justify-between items-center p-3 rounded-lg border ${aiEnhanced ? 'bg-purple-50 border-purple-100' : 'bg-green-50 border-green-100'}`}>
+                     <span className={`${aiEnhanced ? 'text-purple-800' : 'text-green-800'} font-medium`}>
+                        {aiEnhanced ? `✨ ${chunks.length} entidades enriquecidas e limpas pela IA.` : `✅ ${chunks.length} entidades extraídas (Bruto). Recomenda-se processar com Gemini.`}
+                     </span>
                      <button onClick={exportChunks} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
                         <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                        Baixar CSV (Texto Completo)
+                        CSV
                      </button>
                   </div>
                   <div className="overflow-x-auto rounded-lg border border-slate-200">
                     <table className="min-w-full divide-y divide-slate-200">
                       <thead className="bg-slate-50">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">ID</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Fonte</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Tokens</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Conteúdo Extraído</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Tipo (IA)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Rótulo</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Palavras-Chave (Entidades)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Conteúdo (Preview)</th>
                           <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Ação</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-slate-200">
                         {chunks.map(chunk => (
                           <tr key={chunk.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-500">{chunk.id.substring(0, 12)}...</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">{chunk.source}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{chunk.tokens}</td>
-                            <td className="px-6 py-4 text-sm text-slate-500 max-w-md truncate">
-                              {chunk.content.substring(0, 80)}...
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                    chunk.entityType === 'ARTIGO' ? 'bg-blue-100 text-blue-800' :
+                                    chunk.entityType === 'DEFINICAO' ? 'bg-teal-100 text-teal-800' :
+                                    chunk.entityType === 'ESTRUTURA_MACRO' ? 'bg-purple-100 text-purple-800' :
+                                    'bg-slate-100 text-slate-600'
+                                }`}>
+                                    {chunk.entityType}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-slate-800">{chunk.entityLabel}</td>
+                            <td className="px-6 py-4 text-sm text-slate-600 max-w-xs">
+                              <div className="flex flex-wrap gap-1">
+                                {chunk.keywords?.slice(0, 3).map((k, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 bg-yellow-50 text-yellow-700 border border-yellow-100 rounded text-[10px]">{k}</span>
+                                ))}
+                                {chunk.keywords && chunk.keywords.length > 3 && <span className="text-xs text-slate-400">+{chunk.keywords.length - 3}</span>}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">
+                              {chunk.content.substring(0, 60)}...
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                               <button 
-                                onClick={() => openModal("Conteúdo Original do Chunk", chunk.content)}
+                                onClick={() => openModal(`Entidade: ${chunk.entityLabel}`, chunk.content)}
                                 className="text-indigo-600 hover:text-indigo-900 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100"
                               >
-                                Ver Completo
+                                Ver
                               </button>
                             </td>
                           </tr>
@@ -314,30 +373,33 @@ const App: React.FC = () => {
             <div className="space-y-4">
               <div className="flex justify-between items-center bg-indigo-50 p-4 rounded-lg border border-indigo-100 mb-4">
                  <div>
-                    <h3 className="font-semibold text-indigo-900">Geração de Embeddings (CNN 1D)</h3>
-                    <p className="text-sm text-indigo-700">Aplicado aos chunks reais extraídos.</p>
+                    <h3 className="font-semibold text-indigo-900">Geração de Embeddings</h3>
+                    <p className="text-sm text-indigo-700">Vetores gerados a partir do texto limpo e enriquecido.</p>
                  </div>
                  <button onClick={exportEmbeddings} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Baixar CSV (Vetores)
+                    CSV
                  </button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {embeddings.map((emb, idx) => (
                   <div key={emb.id} className="bg-white p-4 rounded-lg border border-slate-200 hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-start mb-2">
-                        <span className="text-xs font-mono text-slate-400">ID: {emb.id}</span>
-                        <span className="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded">Vector dim: 1536</span>
+                        <div>
+                            <span className="text-xs font-bold text-slate-600 block">{emb.entityLabel}</span>
+                            <span className="text-[10px] uppercase text-slate-400">{emb.entityType}</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                           <span className="text-xs text-indigo-600 font-bold border border-indigo-200 px-1 rounded bg-indigo-50">Prazo: {emb.dueDate}</span>
+                        </div>
                     </div>
                     <div className="font-mono text-xs text-green-600 break-all bg-slate-50 p-2 rounded mb-3">
                       [{emb.vector.map(n => n.toFixed(3)).join(', ')}, ...]
                     </div>
-                    <p className="text-sm text-slate-600 mb-3 line-clamp-2">"{emb.contentSummary}"</p>
                     <button 
-                      onClick={() => openModal("Texto Base do Embedding", emb.fullContent)}
+                      onClick={() => openModal(`Texto Base: ${emb.entityLabel}`, emb.fullContent)}
                       className="text-xs font-semibold text-indigo-600 hover:underline"
                     >
-                      Inspecionar Texto Fonte
+                      Inspecionar Texto Limpo
                     </button>
                   </div>
                 ))}
@@ -349,10 +411,9 @@ const App: React.FC = () => {
           {stage === PipelineStage.CLUSTERING && (
             <div className="space-y-4">
                <div className="flex justify-between items-center mb-4">
-                 <p className="text-slate-600">Clusters calculados com base nas propriedades dos chunks reais.</p>
+                 <p className="text-slate-600">Clusters calculados com base nas propriedades semânticas.</p>
                  <button onClick={exportClusters} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Baixar CSV (Clusters)
+                    CSV
                  </button>
                </div>
                
@@ -369,7 +430,11 @@ const App: React.FC = () => {
                                 const data = payload[0].payload as ClusterPoint;
                                 return (
                                     <div className="bg-white p-3 border border-slate-200 shadow-lg rounded text-sm max-w-xs">
-                                        <p className="font-bold mb-1">{data.label}</p>
+                                        <p className="font-bold mb-1 text-indigo-700">{data.label}</p>
+                                        <p className="text-xs font-semibold text-slate-600 mb-1">{data.entityType}</p>
+                                        <div className="flex flex-wrap gap-1 mb-1">
+                                            {data.keywords?.slice(0,3).map(k => <span className="text-[9px] bg-slate-100 px-1 rounded">{k}</span>)}
+                                        </div>
                                         <p className="text-xs text-slate-500 mb-1">Cluster: {data.clusterId}</p>
                                         <p className="text-xs italic truncate">{data.fullContent.substring(0,50)}...</p>
                                     </div>
@@ -387,11 +452,6 @@ const App: React.FC = () => {
                     </ScatterChart>
                   </ResponsiveContainer>
                </div>
-               <div className="grid grid-cols-3 gap-4 text-center">
-                  <div className="p-2 border-t-4 border-blue-500 bg-white shadow-sm rounded">Cluster A (Curto/Denso)</div>
-                  <div className="p-2 border-t-4 border-emerald-500 bg-white shadow-sm rounded">Cluster B (Médio)</div>
-                  <div className="p-2 border-t-4 border-amber-500 bg-white shadow-sm rounded">Cluster C (Extenso)</div>
-               </div>
             </div>
           )}
 
@@ -401,38 +461,28 @@ const App: React.FC = () => {
                <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                   <div className="text-sm text-slate-600">
                      <p><strong>Nós:</strong> {graphData.nodes.length} | <strong>Arestas:</strong> {graphData.links.length}</p>
-                     <p className="text-xs text-slate-400">Arestas baseadas em similaridade de Jaccard (Palavras Reais em Comum).</p>
+                     <p className="text-xs text-slate-400">Conexões semânticas reforçadas pelas entidades descobertas pelo Gemini.</p>
                   </div>
                   <div className="flex space-x-2">
                     <button onClick={exportGraph} className="flex items-center text-sm bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 transition">
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                        Baixar CSV (Nós)
+                        CSV (Nós)
                     </button>
                     <button onClick={exportGraph} className="flex items-center text-sm bg-emerald-700 text-white px-4 py-2 rounded hover:bg-emerald-800 transition">
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-                        Baixar CSV (Arestas)
+                        CSV (Arestas)
                     </button>
                   </div>
                </div>
                
                <ForceGraph 
                  data={graphData} 
-                 onNodeClick={(node) => openModal(`Nó do Grafo: ${node.label}`, node.fullContent)}
+                 onNodeClick={(node) => openModal(`${node.label} (${node.entityType})`, node.fullContent)}
                />
-               
-               <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg text-sm text-blue-800 flex items-start">
-                  <svg className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                  <p>
-                    <strong>Análise de Impacto:</strong> O grafo foi gerado calculando a interseção de palavras entre os chunks reais. A visualização mostra agrupamentos de documentos que compartilham terminologia semelhante.
-                  </p>
-               </div>
             </div>
           )}
 
         </div>
       </main>
 
-      {/* Global Modal */}
       <FullContentModal 
         isOpen={modalOpen} 
         onClose={() => setModalOpen(false)} 
