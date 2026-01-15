@@ -3,10 +3,11 @@ export enum PipelineStage {
   UPLOAD = 'UPLOAD',
   EMBEDDINGS = 'EMBEDDINGS',
   CLUSTERING = 'CLUSTERING',
-  GRAPH = 'GRAPH'
+  GRAPH = 'GRAPH',
+  QUERY = 'QUERY' // Nova etapa real de inferência
 }
 
-export type EmbeddingModelType = 'gemini-004' | 'sentence-bert' | 'use';
+export type EmbeddingModelType = 'gemini-004'; // Somente modelo real
 
 export interface CNNHyperParameters {
   margin: number;       // Margem para Triplet Loss (ex: 0.2)
@@ -108,4 +109,18 @@ export interface ClusterSimilarity {
   similarClusterId: number;
   score: number; // 0-1 (Jaccard ou Cosine)
   sharedKeywords: string[];
+}
+
+// Tipos para RAG Inference
+export interface RAGStepLog {
+  step: 'HYDE' | 'RETRIEVAL' | 'CRAG' | 'GRAPHRAG' | 'GENERATION';
+  description: string;
+  data?: any;
+  status: 'success' | 'warning' | 'error';
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
 }

@@ -1,160 +1,164 @@
 
-# GraphRAG Pipeline Visualizer: Arquitetura de Recuperação Aumentada por Grafos
+# GraphRAG Pipeline Visualizer: Framework de Auditoria e Recuperação Aumentada por Grafos
 
-![Status](https://img.shields.io/badge/Status-Auditoria_Técnica-blue?style=for-the-badge)
-![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_AI_|_D3.js_|_TensorFlow-indigo?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Auditoria_Técnica_Qualis_A1-blue?style=for-the-badge)
+![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_2.0_|_D3.js_|_TensorFlow-indigo?style=for-the-badge)
+![RAG Methods](https://img.shields.io/badge/Methods-HyDE_|_CRAG_|_GraphRAG_|_Agentic-purple?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+
+**Autor Responsável:** Prof. Marcelo Claro Laranjeira
+
+---
 
 ## 📑 1. Resumo Executivo
 
-Este repositório hospeda a implementação de referência de uma pipeline **GraphRAG (Graph-based Retrieval-Augmented Generation)**. Diferentemente de sistemas RAG tradicionais, que dependem exclusivamente de busca vetorial (*vector search*) baseada em similaridade de cosseno em um espaço latente plano, esta arquitetura constrói um **Grafo de Conhecimento Estruturado** a partir de documentos não estruturados (PDFs).
+Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. Diferentemente de sistemas RAG tradicionais ("Naive RAG"), que dependem exclusivamente de busca vetorial (*vector search*) em um espaço latente plano, esta arquitetura orquestra um **Grafo de Conhecimento Semântico** enriquecido por **Agentes Cognitivos**.
 
-O sistema integra **Modelos de Linguagem Grande (LLMs - Google Gemini 2.0)** para extração semântica, **Redes Neurais Convolucionais (CNNs)** com função de perda **Triplet Loss** para refinamento de embeddings, e algoritmos de **Teoria dos Grafos** para detecção de comunidades e centralidade. O objetivo primário é mitigar alucinações estocásticas e permitir inferências do tipo *multi-hop* (conexão lógica de conceitos distantes) através de topologia explícita.
-
----
-
-## 🛠️ 2. Arquitetura da Pipeline (Metodologia)
-
-A pipeline é segmentada em 4 estágios macro, subdivididos em processos atômicos auditáveis. Abaixo detalha-se o funcionamento técnico, a justificativa teórica e o diferencial de engenharia de cada etapa.
-
-### 2.1. Ingestão e Pré-processamento Semântico (Stage: UPLOAD)
-
-#### Objetivo
-Transformação de arquivos PDF binários em unidades de texto processáveis (*chunks*), preservando rigorosamente a hierarquia documental e o contexto semântico.
-
-#### Procedimento Técnico
-1.  **Extração via PDF.js:** Leitura bruta dos bytes e conversão para string, com tratamento de *encoding*.
-2.  **Limpeza Heurística:** Remoção de artefatos de OCR, hifens de quebra de linha e cabeçalhos/rodapés repetitivos que introduzem ruído no espaço vetorial.
-3.  **Chunking Hierárquico:** Segmentação baseada na estrutura lógica do documento (ex: Artigos Jurídicos, Seções Acadêmicas), em detrimento da contagem arbitrária de tokens.
-4.  **Enriquecimento via LLM (Gemini 2.0 Flash):** Cada chunk é submetido a uma inferência para:
-    *   **Classificação Taxonômica:** (ex: "Definição", "Metodologia", "Inciso Legal").
-    *   **Reconhecimento de Entidades Nomeadas (NER):** Extração de palavras-chave fundamentais.
-    *   **Rotulagem Sintética:** Geração de títulos descritivos para facilitar a indexação.
-
-#### 💡 Diferencial & Justificativa
-O *Naive Chunking* (corte fixo a cada $N$ tokens) fragmenta contextos semânticos, prejudicando a recuperação. Nossa abordagem hierárquica preserva a unidade de sentido (o "átomo" de informação). O enriquecimento via LLM injeta metadados explícitos que não existem no texto bruto, aumentando a precisão da vetorização subsequente.
+O sistema integra o estado da arte em LLMs (**Google Gemini 2.0 Flash/Embedding-004**) com técnicas avançadas de **Metric Learning (CNN + Triplet Loss)** e **Teoria Espectral de Grafos**. O objetivo primário é a mitigação rigorosa de alucinações estocásticas através de validação cruzada de recuperação (CRAG) e expansão topológica de contexto (GraphRAG).
 
 ---
 
-### 2.2. Vetorização e Embeddings (Stage: EMBEDDINGS)
+## 🏗️ 2. Arquitetura do Sistema e Fluxo de Dados
 
-#### Objetivo
-Mapeamento do texto enriquecido para vetores numéricos de alta dimensão (*High-Dimensional Vectors*), convertendo linguagem natural em representações matemáticas processáveis.
+O diagrama abaixo ilustra o fluxo de tensores e informações desde a ingestão do documento bruto até a inferência generativa final.
 
-#### Procedimento Técnico
-*   **Modelo Base:** `text-embedding-004` (Google Gemini) ou fallback para `Sentence-BERT`.
-*   **Input Rico (Rich Input):** O vetor não é gerado apenas do corpo do texto. A entrada é concatenada da seguinte forma:
-    $$Input = [Tipo_{Entidade}] \oplus [Keywords] \oplus [Conteúdo]$$
-*   **Dimensionalidade:** 768 dimensões.
-
-#### 💡 Diferencial & Justificativa
-Ao incorporar metadados (tipo e keywords) no input do embedding, força-se o modelo vetorial a "atentar" para as entidades principais e a estrutura, não apenas para a sintaxe da frase. Isso resulta em vetores que agrupam melhor por tópico e função.
-
----
-
-### 2.3. Refinamento Vetorial via CNN e Triplet Loss (Otimização)
-
-#### Objetivo
-Ajuste fino (*Fine-Tuning*) das posições dos vetores no hiperespaço para maximizar a coesão intraclasse e a separação interclasse, utilizando Aprendizado Supervisionado por Métricas.
-
-#### Procedimento Técnico
-1.  **Arquitetura:** Implementação de uma **CNN 1D** otimizada para sequências.
-2.  **Função de Perda (Loss Function):** Utilização da **Triplet Loss**.
-    $$L(A, P, N) = \max(||f(A) - f(P)||^2 - ||f(A) - f(N)||^2 + \alpha, 0)$$
-    *   Onde $A$ é a âncora, $P$ é positivo (mesma classe/keyword) e $N$ é negativo (classe distinta). $\alpha$ é a margem de separação.
-3.  **Validação Cruzada (Cross-Validation):**
-    *   **Estratégia de Split 80/20:** 80% dos vetores compõem o conjunto de treino (onde ocorre a retropropagação do gradiente) e 20% formam o conjunto de validação (para monitoramento de generalização).
-    *   **Otimizador:** AdamW com decaimento de peso (*weight decay*) para regularização.
-
-#### 💡 Diferencial & Justificativa
-Embeddings pré-treinados (como o da OpenAI ou Google) são genéricos. Nosso refinamento adapta a distribuição espacial dos vetores ao **domínio específico** dos documentos carregados. O uso de Triplet Loss é o estado da arte (SOTA) para aprendizado de representações, garantindo que conceitos semanticamente similares fiquem matematicamente próximos.
+```mermaid
+graph TD
+    A[PDF Bruto] -->|Extração & Limpeza| B(Chunks Hierárquicos)
+    B -->|Gemini 2.0: NER & Classificação| C{Enriquecimento Semântico}
+    C -->|Input Augmentation| D[High-Fidelity Embeddings]
+    
+    subgraph "Metric Learning (Refinamento)"
+    D -->|Triplet Loss| E[CNN 1D - Feature Extraction]
+    E -->|Otimização AdamW| F[Espaço Vetorial Ajustado]
+    end
+    
+    subgraph "Topologia & Grafo"
+    F -->|K-Means++ & Silhouette| G[Clusterização Semântica]
+    G -->|Link Prediction: Jaccard + Overlap| H[Grafo de Conhecimento]
+    end
+    
+    subgraph "RAG Lab (Inferência)"
+    User[Query do Usuário] -->|HyDE Generator| I[Documento Hipotético]
+    I -->|Vector Retrieval| J[Candidatos Top-K]
+    J -->|CRAG Evaluator| K{Juiz de Relevância}
+    K -->|Rejeitado| L[Descarte]
+    K -->|Aprovado| M[Nós Âncora]
+    M -->|Graph Traversal| N[Expansão de Vizinhos]
+    N -->|Contexto Estendido| O[Geração Final (Agentic)]
+    end
+```
 
 ---
 
-### 2.4. Clusterização e Construção do Grafo (Stage: CLUSTERING & GRAPH)
+## 🔬 3. Detalhamento Técnico das Etapas (Pipeline Stages)
 
-#### Objetivo
-Transformação da nuvem de pontos vetorial em uma estrutura topológica de nós e arestas, permitindo análise de rede.
+### 3.1. Etapa 1: Ingestão e Enriquecimento Semântico (Upload)
+A pipeline rejeita o *Naive Chunking* (corte arbitrário por tokens). Implementamos um **Chunking Hierárquico Orientado a Estrutura**:
+1.  **Segmentação Lógica:** Identificação de Artigos, Seções e Parágrafos baseada em Regex estrutural.
+2.  **Agente de Limpeza (Data Cleaning Agent):** Um LLM processa cada fragmento para remover ruídos de OCR e normalizar Unicode.
+3.  **Extração de Metadados:**
+    *   **Classificação Taxonômica:** (ex: "Definição Jurídica", "Procedimento Técnico").
+    *   **NER (Named Entity Recognition):** Extração de 3-5 palavras-chave canônicas.
 
-#### Procedimento Técnico (Clusterização)
-*   **Algoritmo:** K-Means++ com determinação dinâmica de $K$ ($\approx \sqrt{N/2}$).
-*   **Validação:** Cálculo do **Silhouette Score** para medir a consistência dos agrupamentos.
-*   **Projeção:** Redução de dimensionalidade para visualização 2D (similar a UMAP).
+### 3.2. Etapa 2: Vetorização e Refinamento Neural (Embeddings)
+Transformação do texto em vetores de 768 dimensões.
+*   **Input Augmentation:** O vetor não é gerado apenas do texto cru.
+    $$Input = [Tipo] \oplus [Rótulo] \oplus [Keywords] \oplus [Conteúdo]$$
+*   **Refinamento CNN (Triplet Loss):** Aplicamos uma **Rede Neural Convolucional 1D** treinada em tempo real (browser-side) para distorcer o espaço vetorial, aproximando conceitos similares e afastando distintos.
+    *   **Função de Perda:** $L = \max(d(A,P) - d(A,N) + \alpha, 0)$
+    *   **Validação:** Cross-Validation 80/20 (Treino/Validação) para evitar overfitting.
 
-#### Procedimento Técnico (Arestas Híbridas)
-A conexão entre dois nós ($A$ e $B$) não é binária. O peso da aresta $W_{AB}$ é calculado por uma função de custo composta:
-
-$$W_{AB} = (\text{Overlap}(A,B) \times 0.6) + (\text{Jaccard}(A,B) \times 0.4)$$
-
-*   **Interseção Semântica (Jaccard):** Baseada nas palavras-chave extraídas pela IA.
-*   **Coeficiente de Sobreposição (Overlap):** Útil para detectar relações de subconjunto (hierarquia).
-*   **Filtro de Confiança:** Arestas com $W_{AB} < 0.35$ são descartadas para reduzir ruído (sparsification).
-
-#### 💡 Diferencial & Justificativa
-A maioria dos RAGs utiliza apenas *K-Nearest Neighbors (KNN)*. Nós criamos arestas explícitas baseadas em **vocabulário compartilhado** e **topologia**. Isso permite detectar comunidades temáticas (ex: cluster de "Direito Penal") e calcular métricas de centralidade (identificando os conceitos "Hub" do documento).
-
----
-
-## 📊 3. Métricas de Auditoria e Qualidade
-
-O sistema gera automaticamente um **Relatório Técnico (Qualis A1)** contendo indicadores fundamentais para validação científica:
-
-1.  **Modularidade (Q):** Mede a força da divisão do grafo em módulos. $Q > 0.4$ indica estrutura comunitária robusta.
-2.  **Densidade do Grafo:** Razão entre arestas existentes e possíveis. Controla a dispersão da informação.
-3.  **Silhouette Score:** Validação da consistência dos clusters (intervalo -1 a 1). Valores > 0.5 indicam alta coesão.
-4.  **Centralidade (Degree/Betweenness):** Identificação matemática dos nós mais influentes na rede.
+### 3.3. Etapa 3 & 4: Clusterização e Construção do Grafo
+A topologia não é aleatória; é determinística baseada em propriedades semânticas.
+*   **Clusterização:** K-Means++ validado por **Silhouette Score** ($S > 0.5$ ideal).
+*   **Definição de Arestas (Links):** A conexão $W_{u,v}$ entre dois nós é calculada por uma função híbrida:
+    $$W_{u,v} = 0.6 \cdot \text{Overlap}(K_u, K_v) + 0.4 \cdot \text{Jaccard}(K_u, K_v)$$
+    *   Onde $K$ são os conjuntos de palavras-chave extraídas pela IA. Isso captura tanto a similaridade vocabular quanto a inclusão semântica.
 
 ---
 
-## 🚀 4. Guia de Reprodutibilidade
+## 🧠 4. Lab RAG: Técnicas Avançadas Implementadas
 
-Para reproduzir os experimentos apresentados, siga os passos abaixo:
+A Etapa 5 ("Lab RAG") não é uma simples consulta. Ela executa uma cadeia de pensamento (*Chain of Thought*) complexa, auditável via logs de engenharia.
+
+### 4.1. HyDE (Hypothetical Document Embeddings)
+*   **Conceito:** A query do usuário é frequentemente curta e pobre semanticamente.
+*   **Implementação:** O sistema alucina intencionalmente uma "Resposta Ideal" (mas fake) usando um LLM.
+*   **Vantagem:** O vetor desta resposta hipotética está muito mais próximo do vetor do documento real do que a pergunta original estaria.
+
+### 4.2. CRAG (Corrective RAG)
+*   **Conceito:** Recuperação vetorial traz ruído ("False Positives").
+*   **Implementação:** Um **LLM Juiz** avalia cada chunk recuperado.
+    *   *Input:* Query + Chunk.
+    *   *Output:* Score de Relevância (0.0 a 1.0).
+    *   *Ação:* Chunks com score $< 0.5$ são descartados antes de poluírem o contexto do gerador final.
+
+### 4.3. GraphRAG (Recuperação Topológica)
+*   **Conceito:** A resposta pode estar no "vizinho" do documento encontrado, não no documento em si.
+*   **Implementação:**
+    1.  Identificamos os nós "âncora" validados pelo CRAG.
+    2.  Navegamos pelas arestas do grafo para recuperar os **vizinhos de 1º grau** (1-hop neighbors).
+    3.  Este contexto estendido permite inferências laterais que a busca vetorial ignora.
+
+### 4.4. Agentic RAG & Memória
+*   **Conceito:** Manutenção de estado e autonomia.
+*   **Implementação:** O sistema mantém um histórico de chat (`ChatHistory`) que é injetado recursivamente no prompt final, permitindo perguntas de seguimento ("E sobre o que falamos antes?").
+
+---
+
+## 📊 5. Métricas de Auditoria (Qualis A1)
+
+O sistema gera um **Relatório Técnico** contendo métricas rigorosas de Ciência de Redes:
+
+| Métrica | Definição Matemática | Interpretação no Contexto RAG |
+| :--- | :--- | :--- |
+| **Modularidade ($Q$)** | $Q = \frac{1}{2m} \sum_{ij} (A_{ij} - \frac{k_i k_j}{2m}) \delta(c_i, c_j)$ | Mede a separabilidade temática. $Q > 0.4$ indica que os documentos formam clusters de conhecimento distintos e coerentes. |
+| **Densidade ($\rho$)** | $\rho = \frac{2|E|}{|V|(|V|-1)}$ | Indica a saturação de informações. Grafos muito densos ("Hairball") causam confusão no LLM; grafos esparsos perdem conexões. |
+| **Centralidade de Autovetor** | $Ax = \lambda x$ | Identifica os documentos "Hub" (autoridades) que conectam múltiplos temas. Essencial para resumir domínios. |
+
+---
+
+## 🚀 6. Guia de Reprodutibilidade
 
 ### Pré-requisitos
-*   Node.js v18 ou superior.
-*   Chave de API válida do Google Gemini (`GEMINI_API_KEY`).
+*   Node.js v18+
+*   Chave de API Google Gemini (`GEMINI_API_KEY`) com acesso aos modelos `gemini-2.0-flash-exp` e `text-embedding-004`.
 
-### Instalação e Configuração
-
+### Instalação
 ```bash
-# 1. Clonar o repositório
-git clone https://github.com/seu-user/graphrag-visualizer.git
-
-# 2. Instalar dependências
+# 1. Instalar dependências
 npm install
 
-# 3. Configurar Variáveis de Ambiente
-# Crie um arquivo .env na raiz do projeto
-echo "API_KEY=sua_chave_aqui" > .env
+# 2. Configurar Ambiente (Opcional, a chave pode ser inserida no código se necessário para dev local)
+export API_KEY="sua_chave_gemini"
 
-# 4. Inicializar a Aplicação
+# 3. Executar Pipeline
 npm start
 ```
 
-### Protocolo de Execução do Experimento
-1.  Acesse a interface em `http://localhost:3000`.
-2.  **Etapa 1:** Realize o upload de PDFs (Artigos Científicos ou Leis recomendados).
-3.  **Etapa 1 (Ação):** Clique em "Limpar & Classificar com Gemini" para ativar a pipeline de NLP.
-4.  **Etapa 2:** Gere os embeddings. Em seguida, configure os hiperparâmetros da CNN (sugerido: *Learning Rate 0.005, Margin 0.2, Mining Strategy: Hard*) e inicie o **Treinamento**. Monitore as curvas de perda de Treino vs. Validação.
-5.  **Etapa 3:** Execute a Clusterização e analise a distribuição espacial.
-6.  **Etapa 4:** Construa o Grafo. Utilize o painel de "Análise de Clusters" para inspecionar os tópicos emergentes.
-7.  **Exportação:** Baixe o Relatório Técnico e as visualizações em PNG de alta resolução.
+### Protocolo de Teste (Lab RAG)
+1.  **Upload:** Carregue PDFs complexos (ex: Legislação, Papers).
+2.  **Enriquecimento:** Execute a IA para gerar metadados.
+3.  **Grafo:** Gere embeddings, treine a CNN e construa o grafo.
+4.  **Lab RAG:** Acesse a aba "Lab RAG".
+    *   Digite uma pergunta complexa que exija síntese.
+    *   Observe o log lateral: HyDE -> Retrieval -> CRAG -> Graph Expansion.
+    *   Verifique se a resposta final cita os nós expandidos pelo grafo.
 
 ---
 
-## ⚠️ 5. Limitações Conhecidas
+## ⚠️ 7. Limitações e Considerações Éticas
 
-*   **Custo Computacional Client-Side:** O refinamento da CNN é executado no navegador. Para datasets massivos (>10k chunks), recomenda-se a migração para um backend Python (PyTorch/TensorFlow).
-*   **Dependência de LLM:** A qualidade final do grafo é diretamente proporcional à qualidade da extração de entidades realizada pelo Gemini na Etapa 1.
-*   **Janela de Contexto:** Referências que cruzam chunks muito distantes podem perder a conexão direta se não houver vocabulário compartilhado explícito.
+1.  **Custo de API:** O método Agentic/CRAG multiplica o número de chamadas ao LLM (1 chamada por chunk recuperado para avaliação).
+2.  **Latência:** A cadeia HyDE + CRAG adiciona latência significativa (~5-10s) em prol da precisão.
+3.  **Viés de Treinamento:** A CNN ajusta os pesos baseada nas *labels* geradas pela própria IA na etapa 1. Erros de classificação inicial podem se propagar.
 
 ---
 
-## 👨‍💻 6. Autoria e Créditos
+## 👨‍💻 8. Créditos e Autoria
 
-Desenvolvido como prova de conceito para arquiteturas avançadas de Sistemas de Recuperação de Informação.
+**Desenvolvimento e Concepção Arquitetural:**
+**Prof. Marcelo Claro Laranjeira**
 
-*   **Engenharia de Prompt:** Otimizada para Gemini 2.0 Flash.
-*   **Visualização de Dados:** D3.js Force Simulation e Recharts.
-*  **AUTOR :** Prof. Marcelo Claro Laranjeira
-*  **Padrão de Projeto:** Programação Reativa Funcional (React Hooks).
+*Este software é uma ferramenta de auditoria técnica destinada à validação de arquiteturas RAG em nível acadêmico e industrial (Qualis A1).*

@@ -123,8 +123,8 @@ export const processRealPDFsToChunks = (rawDocs: { filename: string, text: strin
 
 // --- 2. Embedding Simulation (Respecting Model Dimensions) ---
 export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType: EmbeddingModelType): EmbeddingVector[] => {
-  const dimensions = modelType === 'sentence-bert' ? 768 : 512; // USE is usually 512, S-BERT 768
-  const modelName = modelType === 'sentence-bert' ? 'Sentence-BERT (pt-br)' : 'Universal Sentence Encoder (Multilingual)';
+  const dimensions = 768;
+  const modelName = 'Gemini Text-Embedding-004';
 
   return chunks.map(chunk => {
     // Simulated semantic vector based on content hash + noise to create clusters

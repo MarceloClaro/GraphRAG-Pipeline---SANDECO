@@ -24,6 +24,19 @@ const distSq = (v1: number[], v2: number[]) => {
 };
 
 /**
+ * Calcula a Similaridade de Cosseno entre dois vetores.
+ * Utilizado na etapa de Retrieval Real.
+ */
+export const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
+    if (vecA.length !== vecB.length) return 0;
+    const dotProduct = dot(vecA, vecB);
+    const normA = norm(vecA);
+    const normB = norm(vecB);
+    if (normA === 0 || normB === 0) return 0;
+    return dotProduct / (normA * normB);
+};
+
+/**
  * Simula o treinamento de uma CNN 1D aplicando Triplet Loss nos embeddings existentes.
  * Implementa Cross-Validation 80/20.
  */

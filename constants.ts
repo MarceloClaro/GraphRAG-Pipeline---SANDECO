@@ -1,20 +1,22 @@
-// Textos simulando um corpus acadêmico de alta qualidade (Qualis A1)
-// sobre RAG, Teoria dos Grafos e NLP.
+
+// Textos extraídos do livro: "RAG - RETRIEVAL-AUGMENTED GENERATION: Para Leigos"
+// Autor: Sandeco Macedo (2025/2026)
+// Fonte Teórica para o Framework
 
 export const ACADEMIC_TEXTS = [
-  `A Recuperação Aumentada por Geração (RAG) representa uma mudança paradigmática na arquitetura de Modelos de Linguagem Grande (LLMs). Ao dissociar a memória paramétrica do modelo da base de conhecimento externa, o RAG mitiga alucinações e permite a atualização dinâmica de informações sem a necessidade de retreino custoso. A integração vetorial permite que o modelo consulte um índice denso antes da geração.`,
+  `A Recuperação Aumentada por Geração (RAG) representa uma mudança paradigmática. O cenário ideal para o RAG é aquele onde a verdade é volátil. Pensem em qualquer base de conhecimento que não seja estática. A legislação de um país, por exemplo, está em constante fluxo. O RAG resolve isso com uma elegância impressionante: a 'inteligência' do modelo (sua capacidade de ler e interpretar) é separada do 'conhecimento' (os documentos).`,
   
-  `Na teoria espectral dos grafos, a matriz Laplaciana desempenha um papel crucial na identificação de comunidades. A decomposição de autovalores (eigenvalues) permite o particionamento do grafo minimizando o corte normalizado (Normalized Cut). Este método é matematicamente equivalente ao relaxamento real de problemas de otimização combinatória discreta, sendo fundamental para algoritmos de clusterização espectral.`,
+  `O RAG Simples trata cada pergunta que você faz como se fosse a primeira vez que vocês conversam. Para construir chatbots e assistentes verdadeiramente úteis, precisamos superar essa amnésia. É aqui que entra o RAG com Memória. A ideia é dar ao nosso sistema a capacidade de lembrar do que foi dito antes. Em vez de descartar a conversa após cada resposta, o sistema passa a manter um histórico do diálogo, uma espécie de 'buffer de memória'.`,
   
-  `A arquitetura Transformer, introduzida por Vaswani et al., fundamenta-se no mecanismo de auto-atenção (Self-Attention). Diferentemente de Redes Neurais Recorrentes (RNNs), que processam sequências linearmente, o Transformer permite a modelagem de dependências de longo alcance de forma paralela. A complexidade quadrática O(n²) da atenção, contudo, impõe desafios para contextos extensos, motivando variantes como Sparse Transformers.`,
+  `Se o RAG com Memória deu ao nosso sistema a capacidade de lembrar, o Agentic RAG o eleva a um novo patamar: o da autonomia e da tomada de decisão. Em vez de seguir uma sequência fixa de passos (buscar e depois gerar), um Agent RAG se comporta como um pequeno 'cérebro' que decide dinamicamente qual a melhor ação a tomar. Pense no AgenticRAG como um guarda de trânsito cognitivo. Ele não dirige os carros, mas observa o fluxo e decide quem deve seguir.`,
   
-  `Word Embeddings estáticos, como Word2Vec e GloVe, falham em capturar a polissemia. Em contraste, embeddings contextuais gerados por modelos como BERT (Bidirectional Encoder Representations from Transformers) atribuem representações vetoriais distintas para a mesma palavra dependendo de seu entorno sintático e semântico, capturando nuances pragmáticas essenciais para tarefas de NLU (Natural Language Understanding).`,
+  `O GraphRAG troca a nossa tradicional base de dados de vetores por uma estrutura muito mais rica: um Grafo de Conhecimento (Knowledge Graph). Pense em um grafo como um mapa de relacionamentos. Em vez de 'chunks' de texto isolados, temos Nós (Nodes) representando entidades e Arestas (Edges) representando relações. O GraphRAG convida vocês a fazer algo mais inteligente: antes de responder, organizar a biblioteca por temas e conexões.`,
   
-  `A aplicação de Redes Neurais Convolucionais (CNNs) em 1D para processamento de texto permite a extração de características n-gramaticais locais de forma hierárquica. Ao deslizar filtros sobre a dimensão temporal dos embeddings, a rede aprende padrões de composição semântica, oferecendo uma alternativa computacionalmente eficiente às LSTMs para tarefas de classificação de texto e reconhecimento de entidades nomeadas.`,
+  `O HyDE (Hypothetical Document Embedding) parte de uma premissa genial: em vez de usar a pergunta para encontrar uma resposta, que tal se a gente usasse uma resposta ideal (mesmo que falsa) para encontrar uma resposta real? O sistema gera uma resposta hipotética, transforma em vetor e usa isso para buscar no banco. É uma técnica poderosa para melhorar a precisão da recuperação em perguntas complexas.`,
   
-  `Grafos de Conhecimento (Knowledge Graphs) estruturam informações em triplas (sujeito, predicado, objeto), facilitando o raciocínio dedutivo. A combinação de RAG com Grafos de Conhecimento, denominada GraphRAG, supera as limitações da busca vetorial pura ao permitir a navegação multi-hop, conectando conceitos semanticamente distantes através de caminhos explícitos no grafo.`,
+  `O RAG Corretivo (CRAG) atua como um rigoroso editor de jornal. Após o Retriever buscar os documentos iniciais, um módulo de avaliador de qualidade entra em ação. Ele analisa os chunks recuperados e atribui uma pontuação de relevância. Se os documentos forem irrelevantes, o sistema pode descartá-los ou fazer uma nova busca na web, garantindo que o LLM não alucine com base em contexto ruim.`,
   
-  `Algoritmos de detecção de comunidades, como Louvain e Leiden, otimizam a modularidade da rede. A modularidade mede a densidade de arestas dentro das comunidades em comparação com arestas entre comunidades. O algoritmo de Leiden refina o Louvain garantindo comunidades conectadas e acelerando a convergência, sendo preferível para grafos de grande escala em bioinformática e redes sociais.`
+  `Na teoria dos grafos aplicada ao RAG, algoritmos de centralidade como PageRank ou Betweenness ajudam a identificar os nós mais influentes na rede de conhecimento. Um nó com alta centralidade geralmente representa um conceito fundamental (Hub) que conecta diversos tópicos distintos dentro do corpus, servindo como ponto de ancoragem para a navegação semântica multi-hop.`
 ];
 
 export const COLORS = {
