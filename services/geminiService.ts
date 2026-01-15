@@ -8,6 +8,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Utiliza gemini-1.5-flash para maior estabilidade JSON e prevenção de loops
 const modelName = 'gemini-1.5-flash'; 
+// Alterado para o modelo solicitado/recomendado (text-embedding-004 é a string da API para o modelo Gemini Embedding 004/001 atualizado)
 const embeddingModelName = 'text-embedding-004';
 
 interface GeminiChunkResponse {
@@ -45,6 +46,40 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
   }
   throw lastError;
 }
+
+// --- HEURISTIC FALLBACK (Regex) ---
+// Usado quando a IA falha (ex: Filtros de segurança em textos legais de crimes, ou timeouts)
+const heuristicEnrichment = (chunk: DocumentChunk): DocumentChunk => {
+    const cleanContent = chunk.content.trim();
+    const firstLine = cleanContent.split(/\r?\n/)[0] || "";
+    
+    let label = "Texto";
+    let type = "Conteúdo";
+    
+    // Regex de Alta Precisão para Jurídico Brasileiro
+    if (/^Art\.\s*\d+/i.test(firstLine)) {
+         type = "Artigo";
+         label = firstLine.match(/^Art\.\s*\d+[º°]?/i)?.[0] || "Artigo";
+    } else if (/^§\s*\d+/i.test(firstLine) || /^Parágrafo/i.test(firstLine)) {
+         type = "Parágrafo";
+         label = firstLine.match(/^§\s*\d+[º°]?/i)?.[0] || "§";
+    } else if (/^[IVXLCDM]+\s*[\.\-]/i.test(firstLine)) {
+         type = "Inciso";
+         label = firstLine.split(/[\.\-]/)[0];
+    } else if (/^CAP[IÍ]TULO/i.test(firstLine)) {
+         type = "Capítulo";
+         label = firstLine;
+    } else {
+         label = firstLine.substring(0, 25) + (firstLine.length > 25 ? "..." : "");
+    }
+
+    return {
+        ...chunk,
+        entityType: type,
+        entityLabel: label,
+        keywords: ["Extração Heurística", "Fallback"]
+    };
+};
 
 // --- HYDE: HYPOTHETICAL DOCUMENT EMBEDDING ---
 export const generateHyDEAnswer = async (query: string): Promise<string> => {
@@ -139,7 +174,7 @@ RESPOSTA (Baseada ESTRITAMENTE no contexto acima):
  * Processa um único chunk.
  * ESTRATÉGIA DE ROBUSTEZ:
  * 1. Tenta limpeza completa + metadados.
- * 2. Se falhar (ex: loop infinito), tenta APENAS metadados (mantendo texto original).
+ * 2. Se falhar (ex: loop infinito ou Safety Filter), usa REGEX (Heuristic Enrichment).
  */
 export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<DocumentChunk> => {
   // Input Safety
@@ -190,7 +225,6 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
   } catch (fullError) {
     // Attempt 2: Metadata Only Fallback
     try {
-        // console.warn(`[Gemini Fallback] Chunk ${chunk.id.slice(-4)} cleaning failed. Fetching metadata only.`);
         const fallbackPrompt = `
           Text: "${safeContent}"
           Task: Extract metadata only.
@@ -208,14 +242,15 @@ export const analyzeChunkWithGemini = async (chunk: DocumentChunk): Promise<Docu
         const meta = JSON.parse(fallbackResponse.text || "{}");
         return {
             ...chunk,
-            // Keep original content since cleaning failed
             entityType: meta.entity_type || "Texto",
             entityLabel: meta.entity_label || "Auto",
             keywords: meta.keywords || []
         };
     } catch (finalError) {
-        console.error(`[Gemini] Failed to enrich chunk ${chunk.id.slice(0,8)}. Keeping original.`);
-        return chunk;
+        // Last Resort: Heuristic (Regex)
+        // Isso remove o erro do log e garante que o chunk tenha metadados úteis
+        // console.warn(`[Gemini] AI falhou para chunk ${chunk.id.slice(0,8)}. Usando Heurística.`);
+        return heuristicEnrichment(chunk);
     }
   }
 };

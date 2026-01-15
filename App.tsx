@@ -129,7 +129,7 @@ const App: React.FC = () => {
     try {
         setProcessingStatus("Gerando Embeddings Reais via Gemini API (High-Fidelity)...");
         const embeds = await generateRealEmbeddingsWithGemini(chunks, (progress) => {
-            setProcessingStatus(`Gerando vetores (Gemini-004)... ${progress}%`);
+            setProcessingStatus(`Gerando vetores (text-embedding-004)... ${progress}%`);
         });
         setEmbeddings(embeds);
         setStage(PipelineStage.EMBEDDINGS);
@@ -397,7 +397,7 @@ const App: React.FC = () => {
           <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100 flex-wrap gap-4">
             <h2 className="text-2xl font-bold text-slate-800">
               {stage === PipelineStage.UPLOAD && "1. Ingestão Real & Refinamento AI"}
-              {stage === PipelineStage.EMBEDDINGS && "2. Vetorização (Gemini-004)"}
+              {stage === PipelineStage.EMBEDDINGS && "2. Vetorização (Gemini Text-Embedding-004)"}
               {stage === PipelineStage.CLUSTERING && "3. Clusterização Semântica"}
               {stage === PipelineStage.GRAPH && "4. Grafo de Conhecimento"}
               {stage === PipelineStage.QUERY && "5. Lab RAG (HyDE + CRAG + Graph)"}

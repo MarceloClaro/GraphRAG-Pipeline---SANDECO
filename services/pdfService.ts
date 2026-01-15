@@ -49,8 +49,6 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
       
       // Une os itens de texto com espaço.
       // Em PDFs, palavras frequentemente são itens separados.
-      // Se tiver 'hasEOL' true, pode significar nova linha, mas para RAG seguro,
-      // unimos com espaço para evitar colar palavras.
       const pageText = textContent.items
         .map((item: any) => {
             // Alguns PDFs retornam strings vazias para espaçamento
@@ -85,7 +83,7 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
     
     if (error.name === 'PasswordException') {
       errorMessage += ' O arquivo está protegido por senha.';
-    } else if (error.message && (error.message.includes('fake worker') || error.message.includes('worker'))) {
+    } else if (error.message && (error.message.includes('fake worker') || error.message.includes('worker') || error.message.includes('Setting up fake worker'))) {
       errorMessage += ' Erro no worker do PDF.js. Tente recarregar a página.';
     } else {
       errorMessage += ' Verifique se é um PDF válido.';

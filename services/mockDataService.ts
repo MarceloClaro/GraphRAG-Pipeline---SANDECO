@@ -121,7 +121,7 @@ export const processRealPDFsToChunks = (rawDocs: { filename: string, text: strin
 // --- 2. Embedding Simulation ---
 export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType: EmbeddingModelType): EmbeddingVector[] => {
   const dimensions = 768;
-  const modelName = 'Gemini Text-Embedding-004';
+  const modelName = 'Gemini Text-Embedding-004'; // Atualizado
 
   return chunks.map(chunk => {
     const seed = chunk.content.length;
