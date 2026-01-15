@@ -2,8 +2,8 @@
 # GraphRAG Pipeline Visualizer: Framework de Auditoria e Recuperação Aumentada por Grafos
 
 ![Status](https://img.shields.io/badge/Status-Auditoria_Técnica_Qualis_A1-blue?style=for-the-badge)
-![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_2.0_|_D3.js_|_TensorFlow-indigo?style=for-the-badge)
-![Innovation](https://img.shields.io/badge/Innovation-Triangulated_Supervision-orange?style=for-the-badge)
+![Tech Stack](https://img.shields.io/badge/Stack-React_|_Gemini_1.5_Flash_|_Text--Embedding--004-indigo?style=for-the-badge)
+![Robustness](https://img.shields.io/badge/Robustness-Heuristic_Fallback_|_CDN_Worker-success?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 **Autor Responsável:** Prof. Marcelo Claro Laranjeira
@@ -12,43 +12,48 @@
 
 ## 📑 1. Resumo Executivo e Inovação
 
-Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. O sistema transcende as limitações do RAG tradicional ("Naive RAG") e introduz duas inovações críticas para o nível **Qualis A1**:
+Este repositório hospeda a implementação de referência de uma pipeline **Multi-Stage GraphRAG (Graph-based Retrieval-Augmented Generation)**. O sistema foi atualizado para atingir o nível de robustez **Qualis A1**, introduzindo mecanismos de tolerância a falhas e modelos de última geração:
 
-1.  **Extração Exaustiva e Híbrida:** Uma estratégia de *Chunking* que combina segmentação estrutural (por artigos/seções) com janelas deslizantes (*sliding windows*) para garantir **100% de cobertura textual**, recuperando inclusive notas de rodapé e textos "órfãos" frequentemente descartados por parsers comuns.
-2.  **Mitigação de Viés de Auto-Treinamento (Triangulated Supervision):** Uma técnica nova de refinamento de embeddings que impede que a CNN aprenda os erros ("alucinações") de classificação da IA, triangulando sinais de Rótulo, Adjacência Temporal e Overlap Léxico.
+1.  **Arquitetura Resiliente (Zero-Fail):** Implementação de um sistema de **Fallback Heurístico (Regex)** que assume o controle quando a IA atinge limites de taxa ou filtros de segurança, garantindo 100% de continuidade na ingestão de documentos legais complexos (Vade Mecum, Diários Oficiais).
+2.  **State-of-the-Art Embeddings:** Migração para o modelo **Google `text-embedding-004`**, oferecendo vetores de alta fidelidade (768 dimensões) otimizados para tarefas de recuperação semântica e clusterização.
+3.  **Mitigação de Viés (Triangulated Supervision):** Refinamento de embeddings via CNN com Triplet Loss, utilizando sinais híbridos (Rótulo + Adjacência Temporal + Overlap Léxico) para evitar overfitting em alucinações.
 
 ---
 
 ## 🏗️ 2. Arquitetura do Sistema e Fluxo de Dados
 
-O diagrama abaixo ilustra o fluxo rigoroso de tensores, destacando a validação cruzada no treinamento da CNN.
+O diagrama abaixo ilustra o fluxo rigoroso, destacando a nova camada de segurança heurística.
 
 ```mermaid
 graph TD
-    A[PDF Bruto] -->|Extração 100%| B(Chunks Exaustivos)
-    B -->|Gemini 2.0: NER & Classificação| C{Enriquecimento Semântico}
-    C -->|Input Augmentation| D[High-Fidelity Embeddings]
+    A[PDF Bruto] -->|PDF.js (CDN Worker)| B(Chunks Exaustivos)
+    B --> C{IA Disponível & Segura?}
+    C -->|Sim| D[Gemini 1.5 Flash: NER & Classificação]
+    C -->|Não / Erro| E[Fallback Heurístico (Regex Jurídico)]
+    D --> F{Enriquecimento Semântico}
+    E --> F
+    F -->|Input Augmentation| G[Text-Embedding-004]
     
     subgraph "Inovação: Triangulated Supervision"
-    D -->|Signal 1: AI Label| E{Validador de Tripleto}
-    D -->|Signal 2: Temporal Adjacency| E
-    D -->|Signal 3: Lexical Overlap| E
-    E -->|Consenso >= 2 Sinais| F[CNN 1D - Triplet Loss]
+    G -->|Signal 1: AI Label| H{Validador de Tripleto}
+    G -->|Signal 2: Temporal Adjacency| H
+    G -->|Signal 3: Lexical Overlap| H
+    H -->|Consenso >= 2 Sinais| I[CNN 1D - Triplet Loss]
     end
     
     subgraph "Topologia & Grafo"
-    F -->|K-Means++ & Silhouette| G[Clusterização Semântica]
-    G -->|Link Prediction| H[Grafo de Conhecimento]
+    I -->|K-Means++ & Silhouette| J[Clusterização Semântica]
+    J -->|Link Prediction| K[Grafo de Conhecimento]
     end
     
     subgraph "RAG Lab (Inferência)"
-    User[Query do Usuário] -->|HyDE Generator| I[Documento Hipotético]
-    I -->|Vector Retrieval| J[Candidatos Top-K]
-    J -->|CRAG Evaluator| K{Juiz de Relevância}
-    K -->|Rejeitado| L[Descarte]
-    K -->|Aprovado| M[Nós Âncora]
-    M -->|Graph Traversal| N[Expansão de Vizinhos]
-    N -->|Contexto Estendido| O[Geração Final (Agentic)]
+    User[Query do Usuário] -->|HyDE Generator| L[Documento Hipotético]
+    L -->|Vector Retrieval| M[Candidatos Top-K]
+    M -->|CRAG Evaluator| N{Juiz de Relevância}
+    N -->|Rejeitado| O[Descarte]
+    N -->|Aprovado| P[Nós Âncora]
+    P -->|Graph Traversal| Q[Expansão de Vizinhos]
+    Q -->|Contexto Estendido| R[Geração Final]
     end
 ```
 
@@ -56,42 +61,28 @@ graph TD
 
 ## 🔬 3. Detalhamento Técnico das Etapas
 
-### 3.1. Ingestão Exaustiva (100% Extraction)
-A pipeline rejeita o descarte arbitrário de dados. Implementamos um **Chunking Híbrido**:
-1.  **Segmentação Estrutural:** Regex primário para capturar hierarquias legais (Artigos, Incisos).
-2.  **Sliding Window Fallback:** Se a estrutura falhar, uma janela deslizante de 1000 tokens (com overlap de 200) varre o resíduo.
-3.  **Fusão de Ruído:** Fragmentos menores que 5 caracteres não são descartados, mas fundidos ao chunk anterior, garantindo que pontuações e numerações de página não quebrem a continuidade semântica.
+### 3.1. Ingestão Robusta (Robust Ingestion)
+*   **Worker Dedicado:** Configuração explícita do `pdf.worker.min.js` via CDNJS para contornar problemas de *fake worker* em ambientes ESM.
+*   **Segmentação Híbrida:** 
+    *   *Camada 1 (AI):* Gemini 1.5 Flash analisa e classifica chunks (Artigos, Incisos).
+    *   *Camada 2 (Regex):* Em caso de falha da API (429/500/Safety), um motor Regex de alta precisão identifica estruturas do Direito Brasileiro (Art., §, Capítulos), garantindo que nenhum chunk seja perdido.
 
-### 3.2. Mitigação de Viés: Triangulated Supervision
-Em pipelines tradicionais, se a IA classifica erroneamente um texto A como "Lei" e B como "Lei", a CNN aprende a aproximá-los, reforçando o erro (Viés de Auto-Treinamento).
-Nossa solução **HAC (Hybrid Anchor Consistency)** redefine a mineração de positivos na Triplet Loss. Um par $(A, P)$ só é positivo se satisfizer a lógica:
+### 3.2. Vetorização de Alta Fidelidade
+Utilização do modelo **`text-embedding-004`**. Ao contrário de modelos genéricos, este modelo captura nuances semânticas finas necessárias para distinguir conceitos jurídicos próximos (ex: "Furto" vs "Roubo").
 
-$$ Score(A, P) = \mathbb{I}(Label_A = Label_P) + \mathbb{I}(Adj_A \approx Adj_P) + \mathbb{I}(Jaccard(A, P) > \tau) $$
-
-A atualização de pesos ocorre apenas se:
-1.  $Score \ge 2$ (Concordância de múltiplos sinais); OU
-2.  $Adj_A - Adj_P = 1$ (Vizinhança imediata, fluxo de tópico forte).
-
-Isso ancora o modelo na **realidade física do documento** (adjacência) e na **realidade léxica** (palavras compartilhadas), ignorando alucinações de classificação isoladas.
-
-### 3.3. Refinamento Neural (Embeddings)
-*   **Função de Perda:** $L = \max(d(A,P) - d(A,N) + \alpha, 0)$
-*   **Otimizador:** AdamW com Decaimento de Peso para regularização.
+### 3.3. Refinamento Neural (HAC - Hybrid Anchor Consistency)
+A CNN aprende a aproximar vetores não apenas por rótulos (que podem estar errados), mas pela **triangulação** com a realidade física do documento (proximidade de parágrafos) e realidade léxica (palavras-chave compartilhadas).
 
 ---
 
-## 🧠 4. Lab RAG: Técnicas Avançadas
+## 🧠 4. Lab RAG: Pipeline de Inferência
 
-A Etapa 5 ("Lab RAG") executa uma cadeia auditável:
+A Etapa 5 ("Lab RAG") executa uma cadeia auditável completa:
 
-### 4.1. HyDE (Hypothetical Document Embeddings)
-O sistema alucina intencionalmente uma "Resposta Ideal" (fake) usando um LLM. O vetor desta resposta hipotética serve como proxy para buscar documentos reais, superando a lacuna semântica entre perguntas curtas e documentos técnicos.
-
-### 4.2. CRAG (Corrective RAG)
-Um **LLM Juiz** avalia cada chunk recuperado vetorialmente. Chunks com score de relevância $< 0.5$ são descartados antes da geração, limpando o contexto de ruídos ("Red Herrings").
-
-### 4.3. GraphRAG (Recuperação Topológica)
-Utiliza os nós validados pelo CRAG como "sementes" para caminhar no grafo. Recupera vizinhos de 1º grau conectados por arestas semânticas fortes, capturando contextos que não compartilham palavras-chave diretas com a query (ex: inferência indireta).
+1.  **HyDE (Hypothetical Document Embeddings):** Gera uma resposta alucinada ideal para converter a query do usuário em um vetor compatível com o domínio documental.
+2.  **Retrieval Híbrido:** Busca vetorial (Cosseno) + Filtro de Metadados.
+3.  **CRAG (Corrective RAG):** Um "LLM Juiz" avalia os chunks recuperados. Scores $< 0.6$ são descartados para evitar contaminação do contexto.
+4.  **GraphRAG (Expansão Topológica):** Explora vizinhos de 1º grau no grafo para capturar contextos adjacentes que não possuem palavras-chave diretas com a pergunta.
 
 ---
 
@@ -102,8 +93,8 @@ O sistema gera um **Relatório Técnico** contendo métricas rigorosas:
 | Métrica | Definição Matemática | Interpretação no Contexto RAG |
 | :--- | :--- | :--- |
 | **Modularidade ($Q$)** | $Q = \frac{1}{2m} \sum_{ij} (A_{ij} - \frac{k_i k_j}{2m}) \delta(c_i, c_j)$ | Mede a separabilidade temática. $Q > 0.4$ indica clusters de conhecimento robustos. |
-| **Densidade ($\rho$)** | $\rho = \frac{2|E|}{|V|(|V|-1)}$ | Controla o risco de "Hairball" (excesso de conexões confusas). Ideal: $0.05 < \rho < 0.15$. |
-| **Silhouette Score** | $S = \frac{b-a}{\max(a,b)}$ | Valida a coesão dos clusters antes da construção do grafo. |
+| **Densidade ($\rho$)** | $\rho = \frac{2|E|}{|V|(|V|-1)}$ | Controla o risco de "Hairball". Mantido entre 0.05 e 0.15 para navegabilidade ideal. |
+| **Silhouette Score** | $S = \frac{b-a}{\max(a,b)}$ | Valida a coesão dos clusters gerados pelo embedding `text-embedding-004`. |
 
 ---
 
@@ -111,7 +102,7 @@ O sistema gera um **Relatório Técnico** contendo métricas rigorosas:
 
 ### Pré-requisitos
 *   Node.js v18+
-*   Chave de API Google Gemini (`GEMINI_API_KEY`).
+*   Chave de API Google Gemini (`GEMINI_API_KEY`) com acesso aos modelos `gemini-1.5-flash` e `text-embedding-004`.
 
 ### Instalação
 ```bash
@@ -121,9 +112,10 @@ npm start
 ```
 
 ### Protocolo de Teste (Lab RAG)
-1.  **Upload:** Carregue PDFs. O sistema extrairá 100% do texto.
-2.  **Grafo:** Treine a CNN. Observe no console/status se a perda diminui, indicando que a Supervisão Triangulada está convergindo.
-3.  **Lab RAG:** Faça uma pergunta. Verifique os logs para ver o HyDE gerando a hipótese e o CRAG filtrando o lixo.
+1.  **Upload:** Carregue PDFs complexos (ex: leis, contratos).
+2.  **Enriquecimento:** Observe o fallback entrar em ação se houver instabilidade na API.
+3.  **Vetorização:** Confirme o uso do modelo `gemini-004` nos logs.
+4.  **Lab RAG:** Execute perguntas complexas e verifique o *trace* de execução (HyDE -> Retrieval -> CRAG -> Graph).
 
 ---
 
