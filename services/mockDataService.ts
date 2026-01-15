@@ -12,143 +12,122 @@ const getRandomDueDate = () => {
   return futureDate.toLocaleDateString('pt-BR');
 };
 
-// Helper function to identify hierarchy
+// Helper function to identify hierarchy within a window
 const identifyEntityHierarchy = (text: string): { type: string, label: string } => {
   const cleanText = text.trim();
-  if (/^(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i.test(cleanText)) {
-    const match = cleanText.match(/^(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i);
+  
+  // Regexes de alta precisão para capturar o início do bloco
+  const header = cleanText.substring(0, 150);
+
+  if (/(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i.test(header)) {
+    const match = header.match(/(?:CAPÍTULO|TITULO|LIVRO)\s+[IVXLCDM\d]+/i);
     return { type: 'ESTRUTURA_MACRO', label: match ? match[0].toUpperCase() : 'CAPÍTULO' };
   }
-  if (/^(?:Art\.|Artigo)\s*[\d\.]+/i.test(cleanText)) {
-    const match = cleanText.match(/^(?:Art\.|Artigo)\s*[\d\.]+(?:º|°)?/i);
+  if (/(?:Art\.|Artigo)\s*[\d\.]+/i.test(header)) {
+    const match = header.match(/(?:Art\.|Artigo)\s*[\d\.]+(?:º|°)?/i);
     return { type: 'ARTIGO', label: match ? match[0] : 'Artigo' };
   }
-  if (/^(?:§|Parágrafo)\s*/i.test(cleanText)) {
-    const match = cleanText.match(/^(?:§\s*[\d\.]+(?:º|°)?|Parágrafo\s+único)/i);
+  if (/(?:§|Parágrafo)\s*/i.test(header)) {
+    const match = header.match(/(?:§\s*[\d\.]+(?:º|°)?|Parágrafo\s+único)/i);
     return { type: 'PARAGRAFO', label: match ? match[0] : '§' };
   }
-  if (/^[IVXLCDM]+\s*[\.\-\–]\s+/.test(cleanText)) {
-    const match = cleanText.match(/^[IVXLCDM]+/);
+  if (/^[IVXLCDM]+\s*[\.\-\–]/.test(header)) {
+    const match = header.match(/^[IVXLCDM]+/);
     return { type: 'INCISO', label: match ? `Inciso ${match[0]}` : 'Inciso' };
   }
-  if (/^[a-z]\)\s+/.test(cleanText)) {
-    const match = cleanText.match(/^[a-z]\)/);
-    return { type: 'ALINEA', label: match ? `Alínea ${match[0]}` : 'Alínea' };
+  
+  // Inferência genérica de tópico
+  const firstWords = cleanText.split(/\s+/).slice(0, 5).join(' ');
+  if (firstWords === firstWords.toUpperCase() && firstWords.length > 10) {
+      return { type: 'TITULO_SECAO', label: firstWords.substring(0, 30) };
   }
-  if (cleanText.length < 100 && cleanText === cleanText.toUpperCase() && /[A-Z]/.test(cleanText) && cleanText.length > 3) {
-    return { type: 'TITULO_SECAO', label: cleanText.substring(0, 30) + (cleanText.length > 30 ? '...' : '') };
-  }
+
   return { type: 'FRAGMENTO_TEXTO', label: 'Texto Geral' };
 };
 
-// --- 1. Real Chunking Strategy (Full Coverage / Exhaustive Extraction) ---
+// --- 1. Real Chunking Strategy (Deterministic High-Granularity Sliding Window) ---
+// Ajustado para máxima recuperação (High Recall) -> Mais chunks, menores, mais overlap.
 export const processRealPDFsToChunks = (rawDocs: { filename: string, text: string }[]): DocumentChunk[] => {
   const chunks: DocumentChunk[] = [];
   
+  // CONFIGURAÇÃO DE ALTA GRANULARIDADE (GraphRAG Needs)
+  // 400 chars ~= 60-80 palavras. Ideal para nós de grafo densos.
+  const WINDOW_SIZE = 400;  
+  const OVERLAP = 100;      
+  // Mínimo reduzido para capturar títulos soltos ou frases curtas importantes
+  const MIN_CHUNK_SIZE = 15; 
+
   rawDocs.forEach(doc => {
     const filenameSafe = doc.filename.replace(/[^a-zA-Z0-9]/g, '').substring(0, 5);
     
-    // Normalização preservativa: mantém pontuação e estrutura, normaliza apenas quebras de sistema
-    const normalizedText = doc.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Normalização preservando fluxo
+    const fullText = doc.text.replace(/\s+/g, ' ').trim();
     
-    // 1. Tentativa de Segmentação Estrutural (Parágrafos Lógicos)
-    // Usa lookahead positivo para tentar manter delimitadores se possível, ou split padrão
-    let rawChunks = normalizedText.split(/\n\s*\n/);
-    
-    // Fallback para Sliding Window se a estrutura for pobre (OCR ruim ou txt corrido)
-    if (rawChunks.length < 3 && normalizedText.length > 1000) {
-        // Sliding Window: Blocos de 1000 chars com overlap de 200 chars para garantir contexto nas bordas
-        const windowSize = 1000;
-        const overlap = 200;
-        rawChunks = [];
-        for (let i = 0; i < normalizedText.length; i += (windowSize - overlap)) {
-            rawChunks.push(normalizedText.substring(i, i + windowSize));
-        }
-    }
+    if (fullText.length === 0) return;
 
-    rawChunks.forEach((textPart, index) => {
-      const cleanContent = textPart.trim();
-      
-      // GARANTIA DE INTEGRIDADE (Qualis A1):
-      // Não descartamos textos curtos (<3 chars) cegamente. 
-      // Se for muito curto, tentamos anexar ao chunk anterior se possível, ou mantemos como "Ruído/Marcador".
-      if (!cleanContent) return;
+    let cursor = 0;
+    let chunkIndex = 0;
 
-      if (cleanContent.length < 5) {
-          // Heurística de fusão: anexa a chunk anterior se for pontuação ou número de página solto
-          if (chunks.length > 0) {
-              const lastChunk = chunks[chunks.length - 1];
-              lastChunk.content += ` ${cleanContent}`;
-              lastChunk.tokens += 1;
-              return;
-          }
-      }
+    console.log(`[Chunker] Iniciando processamento de ${doc.filename} (${fullText.length} caracteres)`);
 
-      // TRATAMENTO DE BLOCOS GIGANTES (> 2000 chars)
-      if (cleanContent.length > 2000) {
-         // Subdivisão forçada de blocos massivos com overlap semântico
-         const subSegments = cleanContent.match(/[\s\S]{1,1200}(?=\s|$)/g) || [cleanContent];
-         
-         subSegments.forEach((sub, subIdx) => {
-            const subClean = sub.trim();
-            if (!subClean) return;
-            
-            const { type, label } = identifyEntityHierarchy(subClean);
-            
-            // Ajusta label para indicar continuação
-            const finalLabel = subIdx === 0 ? label : `${label} (Cont. ${subIdx})`;
-            
-            chunks.push({
-                id: `chk_${filenameSafe}_${index}_${subIdx}_${uuid()}`,
-                source: doc.filename,
-                content: subClean,
-                tokens: subClean.split(/\s+/).length,
-                dueDate: getRandomDueDate(),
-                entityType: subIdx === 0 ? type : 'CONTINUACAO',
-                entityLabel: finalLabel,
-                keywords: []
-            });
-         });
-      } else {
-        // Processamento padrão
-        const { type, label } = identifyEntityHierarchy(cleanContent);
+    // Loop "Hard Sliding Window"
+    // Garante iterar até o último caractere
+    while (cursor < fullText.length) {
+        const end = Math.min(cursor + WINDOW_SIZE, fullText.length);
+        const content = fullText.slice(cursor, end).trim();
+
+        // Lógica de Preservação Total:
+        // Se o conteúdo existe, ele é um chunk. Não descartamos nada > MIN_CHUNK_SIZE.
+        // Se for < MIN_CHUNK_SIZE mas for o FINAL do arquivo, mantemos para não perder a conclusão.
+        const isLastChunk = end === fullText.length;
         
-        // Se for texto genérico, cria um label baseado nas primeiras palavras
-        let finalLabel = label;
-        if (type === 'FRAGMENTO_TEXTO') {
-            const words = cleanContent.split(/\s+/);
-            // Pega até 6 palavras para o label ser mais descritivo
-            finalLabel = words.slice(0, 6).join(' ') + (words.length > 6 ? '...' : '');
+        if (content.length >= MIN_CHUNK_SIZE || (content.length > 0 && isLastChunk)) {
+            
+            // Identificação de Metadados
+            const { type, label } = identifyEntityHierarchy(content);
+            
+            // Label refinement
+            let finalLabel = label;
+            if (type === 'FRAGMENTO_TEXTO') {
+                const preview = content.substring(0, 30).replace(/[^\w\s]/gi, '');
+                finalLabel = `${preview}...`;
+            }
+
+            chunks.push({
+                id: `chk_${filenameSafe}_${chunkIndex}_${uuid()}`,
+                source: doc.filename,
+                content: content,
+                tokens: content.split(/\s+/).length,
+                dueDate: getRandomDueDate(),
+                entityType: type,
+                entityLabel: finalLabel,
+                keywords: [] 
+            });
+
+            chunkIndex++;
         }
 
-        chunks.push({
-            id: `chk_${filenameSafe}_${index}_${uuid()}`,
-            source: doc.filename,
-            content: cleanContent,
-            tokens: cleanContent.split(/\s+/).length,
-            dueDate: getRandomDueDate(),
-            entityType: type,
-            entityLabel: finalLabel,
-            keywords: []
-        });
-      }
-    });
+        if (end === fullText.length) break;
+
+        // Avanço Determinístico
+        cursor += (WINDOW_SIZE - OVERLAP);
+    }
   });
   
+  console.log(`[Chunker] Extração Finalizada: ${chunks.length} chunks gerados.`);
   return chunks;
 };
 
-// --- 2. Embedding Simulation (Respecting Model Dimensions) ---
+// --- 2. Embedding Simulation ---
 export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType: EmbeddingModelType): EmbeddingVector[] => {
   const dimensions = 768;
   const modelName = 'Gemini Text-Embedding-004';
 
   return chunks.map(chunk => {
-    // Simulated semantic vector based on content hash + noise to create clusters
     const seed = chunk.content.length;
     const pseudoVector = new Array(dimensions).fill(0).map((_, i) => {
         const val = Math.sin(seed * (i + 1)) * Math.cos(seed); 
-        return (val + 1) / 2; // Normalize 0-1
+        return (val + 1) / 2;
     });
 
     return {
@@ -165,12 +144,10 @@ export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType:
   });
 };
 
-// --- MATH HELPERS (OPTIMIZED) ---
+// --- MATH HELPERS ---
 const euclideanDistance = (a: number[], b: number[]) => {
   let sum = 0;
-  // Use first 50 dimensions for distance to save CPU in browser
   const len = a.length > 50 ? 50 : a.length;
-  
   for (let i = 0; i < len; i++) {
     const diff = a[i] - b[i];
     sum += diff * diff;
@@ -198,7 +175,6 @@ interface KMeansResult { centroids: number[][]; assignments: number[]; inertia: 
 const runKMeans = (vectors: number[][], k: number, maxIterations = 20): KMeansResult => {
   if (vectors.length === 0) return { centroids: [], assignments: [], inertia: 0 };
   if (k > vectors.length) k = vectors.length;
-  // Use first 5 dims for clustering logic speedup in browser simulation
   const reducedVectors = vectors.map(v => v.slice(0, 5));
   
   let centroids = reducedVectors.slice(0, k); 
@@ -240,8 +216,8 @@ const runKMeans = (vectors: number[][], k: number, maxIterations = 20): KMeansRe
 
 export const calculateSilhouetteScore = (vectors: number[][], assignments: number[], k: number): number => {
   if (k < 2) return 0;
-  const n = Math.min(vectors.length, 200); // Sample for performance
-  const sampledVectors = vectors.slice(0, n).map(v => v.slice(0, 10)); // Reduced dim
+  const n = Math.min(vectors.length, 200); 
+  const sampledVectors = vectors.slice(0, n).map(v => v.slice(0, 10)); 
   
   let totalScore = 0;
   for (let i = 0; i < n; i++) {
@@ -276,7 +252,7 @@ export const calculateSilhouetteScore = (vectors: number[][], assignments: numbe
 };
 
 // --- 3. Advanced Clustering Logic ---
-export let currentSilhouetteScore = 0; // Export for report
+export let currentSilhouetteScore = 0; 
 
 export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): ClusterPoint[] => {
   const vectors = embeddings.map(e => e.vector);
@@ -288,13 +264,9 @@ export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): C
   const { assignments, centroids } = runKMeans(vectors, k);
   currentSilhouetteScore = calculateSilhouetteScore(vectors, assignments, k);
   
-  // Projection for Visualization (Fake UMAP)
-  const c1 = centroids[0] || vectors[0].slice(0, 5);
-  const c2 = centroids[1] || vectors[1].slice(0, 5);
-
+  // Projection for Visualization
   return embeddings.map((emb, i) => {
     const clusterId = assignments[i];
-    // Project based on distance to pivots + noise for separation
     const angle = (clusterId / k) * 2 * Math.PI;
     const radius = 30 + Math.random() * 20;
     const baseX = Math.cos(angle) * radius + 50;
@@ -303,7 +275,7 @@ export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): C
     return {
       id: emb.id,
       clusterId: clusterId, 
-      x: baseX + (Math.random() * 10 - 5), // Jitter
+      x: baseX + (Math.random() * 10 - 5),
       y: baseY + (Math.random() * 10 - 5),
       label: emb.entityLabel || `Chunk ${i}`,
       fullContent: emb.fullContent,
@@ -315,7 +287,7 @@ export const generateClustersFromEmbeddings = (embeddings: EmbeddingVector[]): C
   });
 };
 
-// --- 4. Graph Generation (Optimized O(N^2) -> Sparse Approach) ---
+// --- 4. Graph Generation ---
 export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData => {
   const nodes: GraphNode[] = clusters.map(c => ({
     id: c.id,
@@ -328,12 +300,10 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
     keywords: c.keywords
   }));
 
-  // 1. Pre-compute keyword sets for fast intersection
   const nodeKeywordSets = nodes.map(n => 
     new Set(n.keywords?.map(k => k.toLowerCase().trim()) || [])
   );
 
-  // 2. Inverted Index for sparse keyword matching
   const keywordToNodeIndices: Record<string, number[]> = {};
   nodeKeywordSets.forEach((set, nodeIdx) => {
     set.forEach(kw => {
@@ -344,19 +314,14 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
 
   const linksMap = new Map<string, GraphLink>();
 
-  // Helper to add/update link with confidence calculation
   const addLink = (idxA: number, idxB: number, weightBase: number, confidenceBase: number, type: 'semantico' | 'co-ocorrencia' | 'hierarquico') => {
       if (idxA === idxB) return;
-      // Ensure deterministic key
       const key = idxA < idxB ? `${nodes[idxA].id}-${nodes[idxB].id}` : `${nodes[idxB].id}-${nodes[idxA].id}`;
       
       const existing = linksMap.get(key);
       if (existing) {
-          // Reinforce existing link
           existing.value = Math.min(1, existing.value + (weightBase * 0.5));
           existing.confidence = Math.min(1, existing.confidence + (confidenceBase * 0.2));
-          
-          // Upgrade type priority: Hierarquico > Semantico > Co-ocorrencia
           if (type === 'hierarquico') existing.type = 'hierarquico';
           else if (type === 'semantico' && existing.type === 'co-ocorrencia') existing.type = 'semantico';
       } else {
@@ -370,12 +335,10 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
       }
   };
 
-  // 3. PHASE A: Semantic Connections (via Inverted Index)
-  // Logic: Hybrid Similarity = (Overlap Coefficient * 0.6) + (Jaccard Index * 0.4)
-  // Overlap helps detect subset relationships (hierarchical), Jaccard detects exact similarity.
+  // PHASE A: Semantic (Keyword Overlap + Jaccard)
   Object.values(keywordToNodeIndices).forEach(indices => {
       if (indices.length < 2) return;
-      if (indices.length > nodes.length * 0.6) return; // Skip stopwords
+      if (indices.length > nodes.length * 0.6) return;
 
       for (let i = 0; i < indices.length; i++) {
           for (let j = i + 1; j < indices.length; j++) {
@@ -387,7 +350,6 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
               
               if (setA.size === 0 || setB.size === 0) continue;
 
-              // Fast intersection
               let intersection = 0;
               const smallerSet = setA.size < setB.size ? setA : setB;
               const largerSet = setA.size < setB.size ? setB : setA;
@@ -403,20 +365,16 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
 
               const jaccard = intersection / union;
               const overlapCoeff = intersection / minSize;
-
-              // Composite Confidence Score
               const confidence = (overlapCoeff * 0.6) + (jaccard * 0.4);
 
               if (confidence > 0.35) {
-                  // Weight is slightly lower than confidence to keep graph physics springy
                   addLink(u, v, confidence * 0.8, confidence, 'semantico');
               }
           }
       }
   });
 
-  // 4. PHASE B: Structural/Cluster Connections (Intra-Cluster)
-  // Refined: Only link if same Cluster AND (Same Entity Type OR High Density)
+  // PHASE B: Structural (Cluster Homophily)
   const nodesByCluster: Record<number, number[]> = {};
   nodes.forEach((n, idx) => {
       if (!nodesByCluster[n.group]) nodesByCluster[n.group] = [];
@@ -425,27 +383,19 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
 
   Object.values(nodesByCluster).forEach(indices => {
       if (indices.length < 2) return;
-      
       for (let i = 0; i < indices.length; i++) {
           for (let j = i + 1; j < indices.length; j++) {
                const u = indices[i];
                const v = indices[j];
-               
-               // Check Entity Type Homophily
                const sameType = nodes[u].entityType === nodes[v].entityType;
-               
-               // Confidence is lower for pure co-occurrence unless they match type
                const confidence = sameType ? 0.6 : 0.3;
                const weight = sameType ? 0.4 : 0.2;
-
                addLink(u, v, weight, confidence, 'co-ocorrencia');
           }
       }
   });
 
-  const links = Array.from(linksMap.values()).filter(l => l.confidence > 0.3); // Threshold based on confidence
-
-  // Metrics Calculation
+  const links = Array.from(linksMap.values()).filter(l => l.confidence > 0.3);
   const edgeCount = links.length;
   const n = nodes.length;
   const density = n > 1 ? (2 * edgeCount) / (n * (n - 1)) : 0;
@@ -464,16 +414,11 @@ export const generateGraphFromClusters = (clusters: ClusterPoint[]): GraphData =
   });
 
   const avgDegree = n > 0 ? totalDegree / n : 0;
-
-  // Modularity
   let edgesWithinClusters = 0;
   links.forEach(l => {
     const sourceGroup = nodes.find(n => n.id === l.source)?.group;
     const targetGroup = nodes.find(n => n.id === l.target)?.group;
-    
-    if (sourceGroup !== undefined && sourceGroup === targetGroup) {
-        edgesWithinClusters++;
-    }
+    if (sourceGroup !== undefined && sourceGroup === targetGroup) edgesWithinClusters++;
   });
   
   const modularity = edgeCount > 0 ? (edgesWithinClusters / edgeCount) - Math.pow(1 / (nodes.length || 1), 2) : 0;

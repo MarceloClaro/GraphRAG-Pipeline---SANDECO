@@ -1,3 +1,4 @@
+
 import * as pdfjsLibProxy from 'pdfjs-dist';
 
 // Fix for ESM/CJS interop issues with pdfjs-dist on some CDNs (esm.sh)
@@ -39,7 +40,7 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
     const pdf = await loadingTask.promise;
     
-    let fullText = '';
+    const pageTexts: string[] = [];
     
     // Iterar sobre todas as páginas
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -47,24 +48,30 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
       const textContent = await page.getTextContent();
       
       // Une os itens de texto com espaço.
-      // Em alguns PDFs, isso pode juntar palavras que deveriam estar separadas ou separar letras.
-      // Para fins gerais de RAG, o espaço é o separador mais seguro.
+      // Em PDFs, palavras frequentemente são itens separados.
+      // Se tiver 'hasEOL' true, pode significar nova linha, mas para RAG seguro,
+      // unimos com espaço para evitar colar palavras.
       const pageText = textContent.items
-        .map((item: any) => item.str)
+        .map((item: any) => {
+            // Alguns PDFs retornam strings vazias para espaçamento
+            return item.str || " ";
+        })
         .join(' ');
       
-      // Adiciona quebra de página explícita para o chunker identificar contextos
-      fullText += pageText + '\n\n';
+      pageTexts.push(pageText);
     }
 
-    // Limpeza básica do texto
-    // Normaliza espaços em branco (tabulações, múltiplos espaços viram um só)
-    // Mas preserva quebras de parágrafo duplas para o chunking
+    // Join pages with double newlines to mark page boundaries clearly
+    let fullText = pageTexts.join('\n\n');
+
+    // Limpeza Profunda para normalização, mas preservando conteúdo
+    // Remove caracteres de controle estranhos, mas mantém pontuação e acentos
     fullText = fullText
+      .replace(/[\x00-\x09\x0B-\x0C\x0E-\x1F]/g, '') // Remove non-printable control chars (exceto \n)
       .replace(/[ \t]+/g, ' ') // Normaliza espaços horizontais
-      .replace(/(\r\n|\n|\r)/g, '\n') // Normaliza quebras de linha para \n
-      .replace(/\n{3,}/g, '\n\n') // Reduz múltiplos enters para no máximo 2
       .trim();
+
+    console.log(`[PDF Extraction] Extracted ${fullText.length} chars from ${file.name}`);
 
     return {
       filename: file.name,

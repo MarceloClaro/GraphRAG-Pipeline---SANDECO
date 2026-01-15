@@ -27,6 +27,9 @@ const App: React.FC = () => {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [highlightedClusters, setHighlightedClusters] = useState<number[]>([]);
   
+  // Stats
+  const [totalCharsExtracted, setTotalCharsExtracted] = useState<number>(0);
+
   // Refs
   const graphRef = useRef<ForceGraphRef>(null);
 
@@ -68,15 +71,19 @@ const App: React.FC = () => {
     setProcessingStatus("Lendo PDF e extraindo texto...");
     setUploadError(null);
     setAiEnhanced(false);
+    setTotalCharsExtracted(0);
     try {
       const files = Array.from(event.target.files);
       const extractedDocs = [];
+      let totalChars = 0;
       for (const file of files) {
         if (file.type === "application/pdf") {
           const processed = await extractTextFromPDF(file);
+          totalChars += processed.text.length;
           extractedDocs.push(processed);
         } else {
            const text = await file.text();
+           totalChars += text.length;
            extractedDocs.push({ filename: file.name, text: text, pageCount: 1 });
         }
       }
@@ -84,6 +91,7 @@ const App: React.FC = () => {
       if (generatedChunks.length === 0) {
         setUploadError("Nenhum conteúdo de texto pôde ser extraído dos arquivos.");
       } else {
+        setTotalCharsExtracted(totalChars);
         setChunks(generatedChunks);
         setStage(PipelineStage.UPLOAD);
       }
@@ -417,11 +425,21 @@ const App: React.FC = () => {
                    </div>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="min-w-full divide-y divide-slate-200">
-                      <thead className="bg-slate-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Rótulo</th><th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Conteúdo</th><th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Ação</th></tr></thead>
-                      <tbody className="bg-white divide-y divide-slate-200">{chunks.slice(0, 10).map(c => (<tr key={c.id}><td className="px-6 py-4 text-sm font-semibold text-slate-800">{c.entityLabel}</td><td className="px-6 py-4 text-sm text-slate-500 truncate max-w-xs">{c.content}</td><td className="px-6 py-4 text-right"><button onClick={()=>openModal(c.entityLabel||'', c.content)} className="text-indigo-600 hover:underline">Ver</button></td></tr>))}</tbody>
-                    </table>
+                <div className="space-y-2">
+                    <div className="flex justify-between items-end mb-2">
+                        <span className="text-sm font-semibold text-slate-600">Pré-visualização dos Chunks (Granularidade Alta)</span>
+                        <div className="text-right">
+                           <span className="block text-2xl font-bold text-indigo-600">{chunks.length.toLocaleString()} <span className="text-sm font-normal text-slate-500">chunks</span></span>
+                           <span className="text-xs text-emerald-600 font-mono font-medium">Total Caracteres: {totalCharsExtracted.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-lg border border-slate-200 shadow-sm">
+                        <table className="min-w-full divide-y divide-slate-200">
+                        <thead className="bg-slate-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Rótulo</th><th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Conteúdo</th><th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Ação</th></tr></thead>
+                        <tbody className="bg-white divide-y divide-slate-200">{chunks.slice(0, 10).map(c => (<tr key={c.id}><td className="px-6 py-4 text-sm font-semibold text-slate-800">{c.entityLabel}</td><td className="px-6 py-4 text-sm text-slate-500 truncate max-w-xs">{c.content}</td><td className="px-6 py-4 text-right"><button onClick={()=>openModal(c.entityLabel||'', c.content)} className="text-indigo-600 hover:underline">Ver</button></td></tr>))}</tbody>
+                        </table>
+                    </div>
+                    <p className="text-center text-xs text-slate-400 mt-2">Exibindo os primeiros 10 itens para performance.</p>
                 </div>
               )}
             </div>
