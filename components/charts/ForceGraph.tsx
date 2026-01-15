@@ -27,38 +27,49 @@ const ForceGraph = forwardRef<ForceGraphRef, Props>(({ data, onNodeClick, highli
     if (!svgRef.current) return;
     
     const svgElement = svgRef.current;
+    
+    // 1. Setup High-DPI Scaling
+    const scale = 2; // Exportar em 2x (Retina quality) para nitidez
+    const width = svgElement.clientWidth || 800;
+    const height = svgElement.clientHeight || 600;
+
+    // 2. Serialize SVG
     const serializer = new XMLSerializer();
     let source = serializer.serializeToString(svgElement);
     
-    // Add namespace if missing
+    // Add namespace if missing to ensure valid XML
     if (!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
         source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
     }
     
+    // 3. Create Canvas
     const canvas = document.createElement('canvas');
-    const width = svgElement.clientWidth || 800;
-    const height = svgElement.clientHeight || 600;
-
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = width * scale;
+    canvas.height = height * scale;
     const ctx = canvas.getContext('2d');
     
     if (!ctx) return;
 
+    // 4. Load Image and Draw
     const img = new Image();
     const blob = new Blob([source], {type: "image/svg+xml;charset=utf-8"});
     const url = URL.createObjectURL(blob);
     
     img.onload = () => {
-        // Fill background with slate-900 to match the container
+        // Fill background with slate-900 (matches UI container)
         ctx.fillStyle = '#0f172a'; 
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
+        // Draw image scaled
+        // Usamos drawImage com dimensões explícitas para forçar o browser a renderizar o SVG vetorizado no tamanho maior
+        ctx.drawImage(img, 0, 0, width * scale, height * scale);
+        
+        // 5. Trigger Download
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const pngUrl = canvas.toDataURL("image/png");
         const downloadLink = document.createElement("a");
         downloadLink.href = pngUrl;
-        downloadLink.download = "grafo_conhecimento_rag.png";
+        downloadLink.download = `grafo_conhecimento_RAG_${timestamp}.png`;
         document.body.appendChild(downloadLink);
         downloadLink.click();
         document.body.removeChild(downloadLink);

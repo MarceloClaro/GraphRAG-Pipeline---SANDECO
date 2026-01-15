@@ -25,20 +25,14 @@ const distSq = (v1: number[], v2: number[]) => {
 
 /**
  * Simula o treinamento de uma CNN 1D aplicando Triplet Loss nos embeddings existentes.
- * 
- * L = max(d(A, P) - d(A, N) + margin, 0)
- * 
- * Onde:
- * A (Anchor): Uma entidade
- * P (Positive): Entidade relacionada (mesmo tipo ou alta similaridade de keywords)
- * N (Negative): Entidade não relacionada (tipo diferente)
+ * Implementa Cross-Validation 80/20.
  */
 export const trainCNNWithTripletLoss = async (
     embeddings: EmbeddingVector[],
     params: CNNHyperParameters,
     onEpochComplete: (metrics: TrainingMetrics, updatedEmbeddings: EmbeddingVector[]) => void
 ) => {
-    // 1. Deep copy vectors to avoid mutating state directly during calculation
+    // 1. Deep copy vectors
     let currentEmbeddings = embeddings.map(e => ({ ...e, vector: [...e.vector] }));
     const dim = currentEmbeddings[0].vector.length;
 
@@ -48,8 +42,7 @@ export const trainCNNWithTripletLoss = async (
     const epsilon = 1e-8;
     const weightDecay = 0.01;
 
-    // Adam State (Moment1 and Moment2 for each dimension of each vector)
-    // Map ID -> { m: number[], v: number[] }
+    // Adam State
     const optimizerState: Record<string, { m: number[], v: number[] }> = {};
     currentEmbeddings.forEach(e => {
         optimizerState[e.id] = {
@@ -60,36 +53,46 @@ export const trainCNNWithTripletLoss = async (
 
     let learningRate = params.learningRate;
 
-    // --- Training Loop ---
-    for (let epoch = 1; epoch <= params.epochs; epoch++) {
-        let totalLoss = 0;
-        let activeTriplets = 0;
+    // --- Data Splitting (80/20) ---
+    const allIndices = Array.from({ length: currentEmbeddings.length }, (_, i) => i);
+    // Shuffle indices para garantir aleatoriedade no split
+    const shuffledIndices = allIndices.sort(() => Math.random() - 0.5);
+    
+    const splitIndex = Math.floor(currentEmbeddings.length * 0.8);
+    const trainIndices = shuffledIndices.slice(0, splitIndex);
+    const valIndices = shuffledIndices.slice(splitIndex);
 
-        // Shuffle dataset indices
-        const indices = Array.from({ length: currentEmbeddings.length }, (_, i) => i)
-            .sort(() => Math.random() - 0.5);
+    // Sets para lookup rápido durante mineração
+    const trainSet = new Set(trainIndices);
+    const valSet = new Set(valIndices);
 
-        // Batch processing (simulated one-by-one for clarity in JS)
+    // --- Helper function to process a batch (Train or Validation) ---
+    const processBatch = (indices: number[], isTraining: boolean): { loss: number, count: number } => {
+        let batchLoss = 0;
+        let batchTriplets = 0;
+
+        // Valid Index Checker: garante que P e N pertençam ao mesmo set (Treino ou Validação) do Anchor
+        const isValidCandidate = (idx: number) => isTraining ? trainSet.has(idx) : valSet.has(idx);
+
         for (const i of indices) {
             const anchor = currentEmbeddings[i];
             
-            // --- Mining Strategy ---
+            // --- Mining Strategy (Restricted to current set) ---
             let positiveIdx = -1;
             let negativeIdx = -1;
 
-            // Find Positive: Same Entity Type OR Keyword Overlap
-            const potentialPositives = indices.filter(idx => idx !== i && (
+            // Find Positive in same set
+            const potentialPositives = indices.filter(idx => idx !== i && isValidCandidate(idx) && (
                 currentEmbeddings[idx].entityType === anchor.entityType ||
                 hasKeywordOverlap(anchor, currentEmbeddings[idx])
             ));
 
             if (potentialPositives.length > 0) {
-                // Random positive for now (could be hardest positive)
                 positiveIdx = potentialPositives[Math.floor(Math.random() * potentialPositives.length)];
             }
 
-            // Find Negative based on Strategy
-            const potentialNegatives = indices.filter(idx => idx !== i && idx !== positiveIdx && 
+            // Find Negative in same set
+            const potentialNegatives = indices.filter(idx => idx !== i && idx !== positiveIdx && isValidCandidate(idx) && 
                 currentEmbeddings[idx].entityType !== anchor.entityType
             );
 
@@ -97,20 +100,16 @@ export const trainCNNWithTripletLoss = async (
                 if (params.miningStrategy === 'random') {
                     negativeIdx = potentialNegatives[Math.floor(Math.random() * potentialNegatives.length)];
                 } else {
-                    // Hard/Semi-hard Mining
-                    // Find negatives that are CLOSE to anchor (distance < dist(A, P) + margin)
+                    // Hard/Semi-hard Mining logic
                     const distAP = positiveIdx !== -1 ? distSq(anchor.vector, currentEmbeddings[positiveIdx].vector) : 0;
                     
-                    // Sort negatives by distance to anchor ASCENDING
                     const sortedNegatives = potentialNegatives
                         .map(idx => ({ idx, dist: distSq(anchor.vector, currentEmbeddings[idx].vector) }))
                         .sort((a, b) => a.dist - b.dist);
 
                     if (params.miningStrategy === 'hard') {
-                         // Hardest negative: closest one
                         negativeIdx = sortedNegatives[0].idx;
                     } else {
-                        // Semi-hard: Further than P, but within margin
                         const semiHard = sortedNegatives.find(n => n.dist > distAP && n.dist < distAP + params.margin);
                         negativeIdx = semiHard ? semiHard.idx : sortedNegatives[0].idx;
                     }
@@ -129,49 +128,56 @@ export const trainCNNWithTripletLoss = async (
             const loss = Math.max(distPos - distNeg + params.margin, 0);
 
             if (loss > 0) {
-                totalLoss += loss;
-                activeTriplets++;
+                batchLoss += loss;
+                batchTriplets++;
 
-                // --- Gradient Approximation ---
-                // Gradients for Anchor, Positive, Negative
-                // Gradient of dist w.r.t vector v is (v - target) / dist
-                
-                // Grad w.r.t Anchor: (A - P)/distP - (A - N)/distN
-                const gradA_P = mult(sub(anchor.vector, positive.vector), 1 / (distPos + epsilon));
-                const gradA_N = mult(sub(anchor.vector, negative.vector), 1 / (distNeg + epsilon));
-                const gradA = sub(gradA_P, gradA_N); // Push to P, Pull from N
+                // --- Optimization Step (ONLY FOR TRAINING) ---
+                if (isTraining) {
+                    const gradA_P = mult(sub(anchor.vector, positive.vector), 1 / (distPos + epsilon));
+                    const gradA_N = mult(sub(anchor.vector, negative.vector), 1 / (distNeg + epsilon));
+                    const gradA = sub(gradA_P, gradA_N);
+                    const gradP = mult(gradA_P, -1);
+                    const gradN = gradA_N;
 
-                // Grad w.r.t Positive: -(A - P)/distP (Pull to A)
-                const gradP = mult(gradA_P, -1);
-
-                // Grad w.r.t Negative: (A - N)/distN (Push away from A)
-                const gradN = gradA_N;
-
-                // --- AdamW Step ---
-                applyAdamW(anchor.id, anchor.vector, gradA, learningRate, epoch, optimizerState, weightDecay, beta1, beta2, epsilon);
-                applyAdamW(positive.id, positive.vector, gradP, learningRate, epoch, optimizerState, weightDecay, beta1, beta2, epsilon);
-                applyAdamW(negative.id, negative.vector, gradN, learningRate, epoch, optimizerState, weightDecay, beta1, beta2, epsilon);
-                
-                // Re-normalize to keep on hypersphere (common in cosine/dot product spaces)
-                anchor.vector = normalize(anchor.vector);
-                positive.vector = normalize(positive.vector);
-                negative.vector = normalize(negative.vector);
+                    applyAdamW(anchor.id, anchor.vector, gradA, learningRate, 1, optimizerState, weightDecay, beta1, beta2, epsilon);
+                    applyAdamW(positive.id, positive.vector, gradP, learningRate, 1, optimizerState, weightDecay, beta1, beta2, epsilon);
+                    applyAdamW(negative.id, negative.vector, gradN, learningRate, 1, optimizerState, weightDecay, beta1, beta2, epsilon);
+                    
+                    anchor.vector = normalize(anchor.vector);
+                    positive.vector = normalize(positive.vector);
+                    negative.vector = normalize(negative.vector);
+                }
             }
         }
+        return { loss: batchLoss, count: batchTriplets };
+    };
 
-        // --- Learning Rate Scheduler (Linear Decay) ---
+    // --- Training Loop ---
+    for (let epoch = 1; epoch <= params.epochs; epoch++) {
+        
+        // 1. Training Phase
+        // Shuffle train indices each epoch for better SGD behavior
+        const epochTrainIndices = [...trainIndices].sort(() => Math.random() - 0.5);
+        const trainResults = processBatch(epochTrainIndices, true);
+
+        // 2. Validation Phase (No Shuffle needed, no updates)
+        const valResults = processBatch(valIndices, false);
+
+        // --- Metrics Calculation ---
+        const avgTrainLoss = trainResults.count > 0 ? trainResults.loss / trainResults.count : 0;
+        const avgValLoss = valResults.count > 0 ? valResults.loss / valResults.count : 0;
+
+        // Update Learning Rate
         learningRate = params.learningRate * (1 - (epoch / params.epochs));
 
-        // Yield results to UI
-        const avgLoss = activeTriplets > 0 ? totalLoss / activeTriplets : 0;
-        
-        // Simular delay para visualização
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50)); // UI friendly delay
         
         onEpochComplete({
             currentEpoch: epoch,
-            loss: avgLoss,
-            tripletCount: activeTriplets
+            trainLoss: avgTrainLoss,
+            valLoss: avgValLoss,
+            trainTripletCount: trainResults.count,
+            valTripletCount: valResults.count
         }, currentEmbeddings);
     }
 };
@@ -192,20 +198,11 @@ function applyAdamW(
     const s = state[id];
     
     for (let i = 0; i < params.length; i++) {
-        // Weight Decay
         params[i] = params[i] * (1 - lr * weightDecay);
-
-        // Update 1st moment
         s.m[i] = beta1 * s.m[i] + (1 - beta1) * grads[i];
-        
-        // Update 2nd moment
         s.v[i] = beta2 * s.v[i] + (1 - beta2) * (grads[i] * grads[i]);
-
-        // Bias correction
         const mHat = s.m[i] / (1 - Math.pow(beta1, t));
         const vHat = s.v[i] / (1 - Math.pow(beta2, t));
-
-        // Update parameter
         params[i] = params[i] - lr * (mHat / (Math.sqrt(vHat) + epsilon));
     }
 }

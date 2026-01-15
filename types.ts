@@ -18,8 +18,10 @@ export interface CNNHyperParameters {
 
 export interface TrainingMetrics {
   currentEpoch: number;
-  loss: number;
-  tripletCount: number;
+  trainLoss: number;
+  valLoss: number;
+  trainTripletCount: number;
+  valTripletCount: number;
 }
 
 export interface DocumentChunk {

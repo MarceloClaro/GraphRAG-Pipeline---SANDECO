@@ -158,7 +158,7 @@ ${chunk.content}
             const result = await retryOperation(async () => {
                 return await ai.models.embedContent({
                     model: embeddingModelName,
-                    content: richContent, 
+                    contents: richContent, 
                 });
             });
             

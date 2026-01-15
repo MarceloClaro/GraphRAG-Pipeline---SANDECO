@@ -152,11 +152,11 @@ const App: React.FC = () => {
   const handleRunCNNTraining = async () => {
       if (embeddings.length === 0) return;
       setIsProcessing(true);
-      setProcessingStatus("Inicializando CNN com Triplet Loss...");
+      setProcessingStatus("Inicializando CNN com Triplet Loss (Cross-Validation 80/20)...");
 
       try {
           await trainCNNWithTripletLoss(embeddings, cnnParams, (metrics, updatedEmbeddings) => {
-              setProcessingStatus(`Treinando CNN (Epoch ${metrics.currentEpoch}/${cnnParams.epochs}) - Loss: ${metrics.loss.toFixed(4)}`);
+              setProcessingStatus(`Epoch ${metrics.currentEpoch}/${cnnParams.epochs} | Train Loss: ${metrics.trainLoss.toFixed(4)} | Val Loss: ${metrics.valLoss.toFixed(4)}`);
               setTrainingMetrics(metrics);
               setEmbeddings(updatedEmbeddings); // Update visual state with refined vectors
           });
@@ -484,9 +484,17 @@ const App: React.FC = () => {
                         Refinamento CNN (Triplet Loss)
                     </h3>
                     {trainingMetrics && (
-                        <span className="text-xs bg-purple-600 px-2 py-1 rounded">
-                            Epoch {trainingMetrics.currentEpoch} • Loss: {trainingMetrics.loss.toFixed(5)}
-                        </span>
+                        <div className="flex gap-3 text-xs">
+                           <span className="bg-purple-600 px-2 py-1 rounded">
+                             Epoch {trainingMetrics.currentEpoch}
+                           </span>
+                           <span className="bg-blue-600 px-2 py-1 rounded">
+                             Train Loss: {trainingMetrics.trainLoss.toFixed(4)}
+                           </span>
+                           <span className={`px-2 py-1 rounded ${trainingMetrics.valLoss > trainingMetrics.trainLoss ? 'bg-amber-600' : 'bg-green-600'}`}>
+                             Val Loss: {trainingMetrics.valLoss.toFixed(4)}
+                           </span>
+                        </div>
                     )}
                 </div>
                 
@@ -538,7 +546,7 @@ const App: React.FC = () => {
                         disabled={isProcessing}
                         className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex items-center disabled:opacity-50"
                     >
-                         {isProcessing ? 'Treinando...' : 'Iniciar Treinamento'}
+                         {isProcessing ? 'Treinando...' : 'Iniciar Treinamento (Cross-Val)'}
                          <svg className="w-4 h-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                     </button>
                 </div>
