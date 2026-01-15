@@ -1,6 +1,6 @@
 
 import React, { useState, useRef } from 'react';
-import { PipelineStage, DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, EmbeddingModelType } from './types';
+import { PipelineStage, DocumentChunk, EmbeddingVector, ClusterPoint, GraphData, EmbeddingModelType, CNNHyperParameters, TrainingMetrics } from './types';
 import { 
   processRealPDFsToChunks, 
   generateEmbeddingsFromChunks, 
@@ -8,6 +8,7 @@ import {
   generateGraphFromClusters 
 } from './services/mockDataService';
 import { enhanceChunksWithAI, generateRealEmbeddingsWithGemini } from './services/geminiService';
+import { trainCNNWithTripletLoss } from './services/cnnRefinementService'; // Importar novo serviço
 import { extractTextFromPDF } from './services/pdfService';
 import { downloadCSV } from './services/exportService';
 import { generateTechnicalReport } from './services/reportService';
@@ -32,6 +33,16 @@ const App: React.FC = () => {
 
   // Settings
   const [embeddingModel, setEmbeddingModel] = useState<EmbeddingModelType>('gemini-004');
+  
+  // CNN Training Settings
+  const [cnnParams, setCnnParams] = useState<CNNHyperParameters>({
+    margin: 0.2,
+    learningRate: 0.005,
+    epochs: 15,
+    miningStrategy: 'hard',
+    optimizer: 'adamw'
+  });
+  const [trainingMetrics, setTrainingMetrics] = useState<TrainingMetrics | null>(null);
   
   // Upload State
   const [isProcessing, setIsProcessing] = useState(false);
@@ -108,6 +119,7 @@ const App: React.FC = () => {
   const handleProcessEmbeddings = async () => {
     setIsProcessing(true);
     setProcessingStatus("Inicializando modelo de embedding...");
+    setTrainingMetrics(null); // Reset metrics
     
     // Pequeno delay para UI atualizar
     await new Promise(r => setTimeout(r, 100));
@@ -135,6 +147,26 @@ const App: React.FC = () => {
     } finally {
         setIsProcessing(false);
     }
+  };
+
+  const handleRunCNNTraining = async () => {
+      if (embeddings.length === 0) return;
+      setIsProcessing(true);
+      setProcessingStatus("Inicializando CNN com Triplet Loss...");
+
+      try {
+          await trainCNNWithTripletLoss(embeddings, cnnParams, (metrics, updatedEmbeddings) => {
+              setProcessingStatus(`Treinando CNN (Epoch ${metrics.currentEpoch}/${cnnParams.epochs}) - Loss: ${metrics.loss.toFixed(4)}`);
+              setTrainingMetrics(metrics);
+              setEmbeddings(updatedEmbeddings); // Update visual state with refined vectors
+          });
+          setProcessingStatus("Treinamento concluído.");
+      } catch (err) {
+          console.error("Erro no treinamento CNN", err);
+          setUploadError("Falha no refinamento CNN.");
+      } finally {
+          setIsProcessing(false);
+      }
   };
 
   const handleRunClustering = () => {
@@ -443,6 +475,75 @@ const App: React.FC = () => {
                     CSV
                  </button>
               </div>
+
+              {/* CNN Training Controls */}
+              <div className="bg-slate-800 text-white p-4 rounded-lg shadow-lg mb-6">
+                <div className="flex justify-between items-center border-b border-slate-700 pb-2 mb-3">
+                    <h3 className="font-bold flex items-center">
+                        <svg className="w-5 h-5 mr-2 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                        Refinamento CNN (Triplet Loss)
+                    </h3>
+                    {trainingMetrics && (
+                        <span className="text-xs bg-purple-600 px-2 py-1 rounded">
+                            Epoch {trainingMetrics.currentEpoch} • Loss: {trainingMetrics.loss.toFixed(5)}
+                        </span>
+                    )}
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                    <div>
+                        <label className="text-xs text-slate-400 block mb-1">Margin</label>
+                        <input 
+                            type="number" step="0.1" 
+                            value={cnnParams.margin}
+                            onChange={(e) => setCnnParams({...cnnParams, margin: parseFloat(e.target.value)})}
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white focus:ring-1 focus:ring-purple-500"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs text-slate-400 block mb-1">Learning Rate</label>
+                        <input 
+                            type="number" step="0.001" 
+                            value={cnnParams.learningRate}
+                            onChange={(e) => setCnnParams({...cnnParams, learningRate: parseFloat(e.target.value)})}
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white focus:ring-1 focus:ring-purple-500"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs text-slate-400 block mb-1">Epochs</label>
+                        <input 
+                            type="number" 
+                            value={cnnParams.epochs}
+                            onChange={(e) => setCnnParams({...cnnParams, epochs: parseInt(e.target.value)})}
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white focus:ring-1 focus:ring-purple-500"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs text-slate-400 block mb-1">Mining Strategy</label>
+                        <select 
+                            value={cnnParams.miningStrategy}
+                            onChange={(e) => setCnnParams({...cnnParams, miningStrategy: e.target.value as any})}
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-white focus:ring-1 focus:ring-purple-500"
+                        >
+                            <option value="hard">Hard Negatives</option>
+                            <option value="semi-hard">Semi-Hard</option>
+                            <option value="random">Random</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div className="flex justify-end">
+                    <button 
+                        onClick={handleRunCNNTraining} 
+                        disabled={isProcessing}
+                        className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex items-center disabled:opacity-50"
+                    >
+                         {isProcessing ? 'Treinando...' : 'Iniciar Treinamento'}
+                         <svg className="w-4 h-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {embeddings.map((emb, idx) => (
                   <div key={emb.id} className="bg-white p-4 rounded-lg border border-slate-200 hover:shadow-md transition-shadow">

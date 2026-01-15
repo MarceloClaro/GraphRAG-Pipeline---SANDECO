@@ -36,7 +36,6 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
     const arrayBuffer = await file.arrayBuffer();
     
     // Carregar documento
-    // Importante: O worker deve estar configurado antes desta chamada
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
     const pdf = await loadingTask.promise;
     
@@ -47,17 +46,24 @@ export const extractTextFromPDF = async (file: File): Promise<ProcessedPDF> => {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       
+      // Une os itens de texto com espaço.
+      // Em alguns PDFs, isso pode juntar palavras que deveriam estar separadas ou separar letras.
+      // Para fins gerais de RAG, o espaço é o separador mais seguro.
       const pageText = textContent.items
         .map((item: any) => item.str)
         .join(' ');
-        
+      
+      // Adiciona quebra de página explícita para o chunker identificar contextos
       fullText += pageText + '\n\n';
     }
 
     // Limpeza básica do texto
+    // Normaliza espaços em branco (tabulações, múltiplos espaços viram um só)
+    // Mas preserva quebras de parágrafo duplas para o chunking
     fullText = fullText
-      .replace(/\s+/g, ' ') // Remover espaços excessivos
-      .replace(/(\r\n|\n|\r){2,}/g, '\n\n') // Normalizar quebras de parágrafo
+      .replace(/[ \t]+/g, ' ') // Normaliza espaços horizontais
+      .replace(/(\r\n|\n|\r)/g, '\n') // Normaliza quebras de linha para \n
+      .replace(/\n{3,}/g, '\n\n') // Reduz múltiplos enters para no máximo 2
       .trim();
 
     return {

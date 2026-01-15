@@ -8,6 +8,20 @@ export enum PipelineStage {
 
 export type EmbeddingModelType = 'gemini-004' | 'sentence-bert' | 'use';
 
+export interface CNNHyperParameters {
+  margin: number;       // Margem para Triplet Loss (ex: 0.2)
+  learningRate: number; // Taxa de aprendizado inicial (ex: 0.001)
+  epochs: number;       // Número de iterações (ex: 20)
+  miningStrategy: 'hard' | 'semi-hard' | 'random'; // Estratégia de seleção de tripletos
+  optimizer: 'adamw' | 'sgd';
+}
+
+export interface TrainingMetrics {
+  currentEpoch: number;
+  loss: number;
+  tripletCount: number;
+}
+
 export interface DocumentChunk {
   id: string;
   source: string;

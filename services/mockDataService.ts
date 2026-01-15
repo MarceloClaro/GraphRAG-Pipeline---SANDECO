@@ -34,42 +34,90 @@ const identifyEntityHierarchy = (text: string): { type: string, label: string } 
     const match = cleanText.match(/^[a-z]\)/);
     return { type: 'ALINEA', label: match ? `Alínea ${match[0]}` : 'Alínea' };
   }
-  if (cleanText.length < 60 && cleanText === cleanText.toUpperCase() && /[A-Z]/.test(cleanText)) {
-    return { type: 'TITULO_SECAO', label: cleanText.substring(0, 20) };
+  if (cleanText.length < 100 && cleanText === cleanText.toUpperCase() && /[A-Z]/.test(cleanText) && cleanText.length > 3) {
+    return { type: 'TITULO_SECAO', label: cleanText.substring(0, 30) + (cleanText.length > 30 ? '...' : '') };
   }
   return { type: 'FRAGMENTO_TEXTO', label: 'Texto Geral' };
 };
 
-// --- 1. Real Chunking Strategy ---
+// --- 1. Real Chunking Strategy (Full Coverage) ---
 export const processRealPDFsToChunks = (rawDocs: { filename: string, text: string }[]): DocumentChunk[] => {
   const chunks: DocumentChunk[] = [];
+  
   rawDocs.forEach(doc => {
-    let rawChunks = doc.text.split(/\n\n+/);
-    if (rawChunks.length < 2 && doc.text.length > 500) {
-        rawChunks = doc.text.match(/.{1,1000}(?:\s|$)/g) || [doc.text];
+    const filenameSafe = doc.filename.replace(/[^a-zA-Z0-9]/g, '').substring(0, 5);
+    
+    // Normalização de quebras de linha para garantir consistência
+    const normalizedText = doc.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    
+    // Estratégia Principal: Divisão por Parágrafos (Linha Dupla)
+    let rawChunks = normalizedText.split(/\n\s*\n/);
+    
+    // Estratégia de Fallback: Se o texto for um bloco monolítico (ex: OCR ruim ou formatação estranha)
+    if (rawChunks.length < 3 && normalizedText.length > 1000) {
+        // Usa Regex com [\s\S] para capturar tudo, incluindo quebras de linha.
+        // Divide em blocos de ~1000 caracteres, tentando respeitar espaços.
+        rawChunks = normalizedText.match(/[\s\S]{1,1000}(?=\s|$)/g) || [normalizedText];
     }
+
     rawChunks.forEach((textPart, index) => {
       const cleanContent = textPart.trim();
-      if (cleanContent.length > 20) { 
+      
+      // FILTRO MÍNIMO: Apenas descarta string vazia ou ruído extremo (< 3 chars).
+      // Isso garante que títulos, headers e frases curtas sejam preservados.
+      if (!cleanContent || cleanContent.length < 3) return;
+
+      // TRATAMENTO DE BLOCOS GIGANTES (> 2000 chars)
+      // Se um parágrafo for muito longo, ele deve ser subdividido para caber na janela de contexto do embedding.
+      if (cleanContent.length > 2000) {
+         // Subdivisão forçada de blocos massivos
+         const subSegments = cleanContent.match(/[\s\S]{1,1200}(?=\s|$)/g) || [cleanContent];
+         
+         subSegments.forEach((sub, subIdx) => {
+            const subClean = sub.trim();
+            if (subClean.length < 3) return;
+            
+            const { type, label } = identifyEntityHierarchy(subClean);
+            
+            // Ajusta label para indicar continuação
+            const finalLabel = subIdx === 0 ? label : `${label} (Cont. ${subIdx})`;
+            
+            chunks.push({
+                id: `chk_${filenameSafe}_${index}_${subIdx}_${uuid()}`,
+                source: doc.filename,
+                content: subClean,
+                tokens: subClean.split(/\s+/).length,
+                dueDate: getRandomDueDate(),
+                entityType: subIdx === 0 ? type : 'CONTINUACAO',
+                entityLabel: finalLabel,
+                keywords: []
+            });
+         });
+      } else {
+        // Processamento padrão para chunks de tamanho normal
         const { type, label } = identifyEntityHierarchy(cleanContent);
+        
+        // Se for texto genérico, cria um label baseado nas primeiras palavras
         let finalLabel = label;
         if (type === 'FRAGMENTO_TEXTO') {
-            const firstWords = cleanContent.split(' ').slice(0, 3).join(' ');
-            finalLabel = `${firstWords}...`;
+            const words = cleanContent.split(/\s+/);
+            finalLabel = words.slice(0, 4).join(' ') + (words.length > 4 ? '...' : '');
         }
+
         chunks.push({
-          id: `chk_${doc.filename.substring(0,3)}_${index}_${uuid()}`,
-          source: doc.filename,
-          content: cleanContent,
-          tokens: cleanContent.split(' ').length,
-          dueDate: getRandomDueDate(),
-          entityType: type,
-          entityLabel: finalLabel,
-          keywords: [] 
+            id: `chk_${filenameSafe}_${index}_${uuid()}`,
+            source: doc.filename,
+            content: cleanContent,
+            tokens: cleanContent.split(/\s+/).length,
+            dueDate: getRandomDueDate(),
+            entityType: type,
+            entityLabel: finalLabel,
+            keywords: []
         });
       }
     });
   });
+  
   return chunks;
 };
 
@@ -104,7 +152,6 @@ export const generateEmbeddingsFromChunks = (chunks: DocumentChunk[], modelType:
 const euclideanDistance = (a: number[], b: number[]) => {
   let sum = 0;
   // Use first 50 dimensions for distance to save CPU in browser
-  // Pre-calculate limit to avoid Math.min inside tight loops if possible
   const len = a.length > 50 ? 50 : a.length;
   
   for (let i = 0; i < len; i++) {
