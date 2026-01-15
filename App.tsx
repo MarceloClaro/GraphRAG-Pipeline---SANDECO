@@ -188,6 +188,42 @@ const App: React.FC = () => {
     setReportOpen(true);
   };
 
+  // --- CSV EXPORT HANDLERS (GRANULAR) ---
+
+  const handleExportChunks = () => {
+      const data = chunks.map(c => ({
+          ID: c.id,
+          Fonte: c.source,
+          Tipo: c.entityType,
+          Rotulo: c.entityLabel,
+          Tokens: c.tokens,
+          Conteudo_Completo: c.content
+      }));
+      downloadCSV(data, `Etapa1_Chunks_${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
+  const handleExportEmbeddings = () => {
+      const data = embeddings.map(e => ({
+          ID: e.id,
+          Rotulo: e.entityLabel,
+          Vetor_Preview: `[${e.vector.slice(0,5).map(v=>v.toFixed(4)).join(';')}]`,
+          Modelo: e.modelUsed,
+          Dimensoes: e.vector.length
+      }));
+      downloadCSV(data, `Etapa2_Embeddings_${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
+  const handleExportClusters = () => {
+      const data = clusters.map(c => ({
+          ID: c.id,
+          Rotulo: c.label,
+          Cluster_ID: c.clusterId,
+          Coord_X: c.x.toFixed(4),
+          Coord_Y: c.y.toFixed(4)
+      }));
+      downloadCSV(data, `Etapa3_Clusters_${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
   const handleUnifiedExport = () => {
     if (!graphData || chunks.length === 0) {
         alert("O grafo precisa ser construído.");
@@ -370,6 +406,9 @@ const App: React.FC = () => {
               
               {stage === PipelineStage.UPLOAD && chunks.length > 0 && (
                 <>
+                  <button onClick={handleExportChunks} className="border border-slate-300 hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center mr-2">
+                    <svg className="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg> CSV
+                  </button>
                   {!aiEnhanced && (
                     <button onClick={handleEnhanceWithAI} disabled={isProcessing} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
                       <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg> Enriquecer com Gemini
@@ -381,14 +420,24 @@ const App: React.FC = () => {
                 </>
               )}
               {stage === PipelineStage.EMBEDDINGS && (
+                <>
+                <button onClick={handleExportEmbeddings} className="border border-slate-300 hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center mr-2">
+                    <svg className="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg> CSV
+                </button>
                 <button onClick={handleRunClustering} disabled={isProcessing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
                   Executar Clusterização <span className="ml-2">→</span>
                 </button>
+                </>
               )}
               {stage === PipelineStage.CLUSTERING && (
+                <>
+                <button onClick={handleExportClusters} className="border border-slate-300 hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center mr-2">
+                    <svg className="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg> CSV
+                </button>
                 <button onClick={handleBuildGraph} disabled={isProcessing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
                   Construir Grafo <span className="ml-2">→</span>
                 </button>
+                </>
               )}
               {stage === PipelineStage.GRAPH && (
                 <>
@@ -396,7 +445,7 @@ const App: React.FC = () => {
                     🧪 Entrar no Lab RAG
                 </button>
                 <button onClick={handleUnifiedExport} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center border-2 border-teal-500">
-                    Dataset CSV
+                    Dataset Completo (Unified)
                 </button>
                 <button onClick={handleGenerateReport} className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg shadow-sm transition-all font-medium flex items-center">
                     Relatório
